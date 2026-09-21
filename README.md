@@ -45,4 +45,4 @@ From `frontend`: `npm run build`.
 
 ## Publishing
 
-The Publishing & analytics dashboard shows per-channel connection status, completed-video upload controls, publication records and 28-day YouTube analytics. Credentials are server-side environment variables. Configure the exact channel mapping before enabling Auto-publish in Settings. YouTube defaults to private; uncertain uploads require operator reconciliation to avoid duplicates. No uploads or analytics access can be live-verified until account credentials and permissions are supplied.
+The Publishing & analytics dashboard shows per-channel connection status, completed-video upload controls, publication records and 28-day YouTube analytics. Credentials are server-side environment variables. Configure the exact channel mapping before enabling Auto-publish in Settings. YouTube defaults to private; uncertain uploads require operator reconciliation to avoid duplicates. No uploads or analytics access can be live-verified until account credentials and permissions are supplied..
