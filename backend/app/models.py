@@ -49,6 +49,18 @@ class SocialConnection(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
 
 
+class MetaConnection(Base):
+    __tablename__ = 'meta_connections'
+    channel_slug: Mapped[str] = mapped_column(String(64), primary_key=True)
+    token_encrypted: Mapped[str] = mapped_column(Text, default='')
+    account_id: Mapped[str] = mapped_column(String(128), default='')
+    account_name: Mapped[str] = mapped_column(String(255), default='')
+    page_id: Mapped[str] = mapped_column(String(128), default='')
+    pending_encrypted: Mapped[str] = mapped_column(Text, default='')
+    pending_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
 class OAuthAttempt(Base):
     __tablename__ = "oauth_attempts"
     id: Mapped[str] = mapped_column(String(64), primary_key=True)

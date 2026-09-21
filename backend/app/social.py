@@ -27,6 +27,7 @@ def credentials(slug):
             "instagram_account_id": mapping.get("instagram_account_id", "")}
 
 def status(slug):
+    from .meta_oauth import connection_status
     error = ''
     try:
         c = credentials(slug)
@@ -34,12 +35,18 @@ def status(slug):
         c = {}; error = 'Saved authorization cannot be read; reconnect this channel'
     with session_scope() as s:
         saved = s.get(SocialConnection, slug)
+    meta = connection_status(slug)
+    try:
+        c.update(instagram_credentials(slug))
+    except Exception:
+        c['instagram_access_token'] = ''
+        meta['meta_error'] = 'Saved Meta token cannot be read; reconnect Meta'
     configured = bool(boot().youtube_client_id and boot().youtube_client_secret)
     return {"channel": slug, "youtube": bool(c.get("youtube_refresh_token") and configured),
             "youtube_oauth_configured": configured,
             "youtube_channel_name": saved.remote_channel_name if saved else '',
             "youtube_channel_id": saved.remote_channel_id if saved else '', 'connection_error': error,
-            "instagram": bool(c.get("instagram_access_token") and c.get("instagram_account_id"))}
+            "instagram": bool(c.get("instagram_access_token") and c.get("instagram_account_id")), **meta}
 
 def youtube_token(slug):
     c = credentials(slug)
@@ -213,9 +220,22 @@ def verify_youtube_publication(video_id):
             'processing': processing, 'warning': warning}
 
 
+def instagram_credentials(slug):
+    from .meta_oauth import credentials as meta_credentials
+    saved = meta_credentials(slug)
+    if saved:
+        return saved
+    mapping = json.loads(boot().social_channels_json).get(slug, {})
+    return {k:mapping.get(k, '') for k in ('instagram_access_token', 'instagram_account_id')}
+
+
 def _instagram(v, p):
     from .publishing_copy import publication_copy
-    c = credentials(v.channel_slug)
+    c = instagram_credentials(v.channel_slug)
+    if not c.get('instagram_access_token') or not c.get('instagram_account_id'):
+        raise ValueError('Connect Instagram for this channel first')
+    if not storage.is_supabase_url(v.output_path):
+        raise ValueError('Instagram requires a persisted Supabase video')
     base = f"https://graph.facebook.com/{boot().instagram_graph_version}"
     headers = {"Authorization": "Bearer " + c["instagram_access_token"]}
     with httpx.Client(timeout=60) as client:

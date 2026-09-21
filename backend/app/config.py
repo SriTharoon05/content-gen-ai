@@ -33,6 +33,9 @@ class Boot(BaseSettings):
     youtube_client_secret: str = Field(default="", validation_alias=AliasChoices("YOUTUBE_CLIENT_SECRET", "GOOGLE_CLIENT_SECRET"))
     google_redirect_uri: str = "http://localhost:8000/auth/google/callback"
     oauth_encryption_key: str = ""
+    meta_app_id: str = ""
+    meta_app_secret: str = ""
+    meta_redirect_uri: str = "http://localhost:8000/auth/meta/callback"
     youtube_refresh_token: str = ""
     youtube_channel_tokens_json: str = "{}"
     instagram_access_token: str = ""

@@ -45,6 +45,9 @@ async function request(path, { method = 'GET', body, raw } = {}) {
 export const api = {
   integrations: () => request('/integrations'),
   connectYoutube: (slug) => request(`/channels/${slug}/youtube/connect`, { method: 'POST' }),
+  connectMeta: (slug) => request(`/channels/${slug}/meta/connect`, { method: 'POST' }),
+  selectMeta: (slug, account_id) => request(`/channels/${slug}/meta/select`, { method: 'POST', body: {account_id} }),
+  approveInstagram: (id) => request(`/videos/${id}/instagram/approve`, { method: 'POST' }),
   uploadFlow: (id) => request(`/videos/${id}/upload-flow`, { method: 'POST' }),
   verifyYoutube: (id) => request(`/videos/${id}/youtube/verify`, { method: 'POST' }),
   analytics: (slug) => request(`/channels/${slug}/analytics`),

@@ -48,7 +48,7 @@ class OAuthLogFilter(logging.Filter):
     def filter(self, record):
         if isinstance(record.args, tuple) and len(record.args) == 5:
             args = list(record.args)
-            if str(args[2]).startswith('/auth/google/'):
+            if str(args[2]).startswith(('/auth/google/', '/auth/meta/')):
                 args[2] = str(args[2]).split('?')[0]
                 record.args = tuple(args)
         return True
@@ -1150,6 +1150,64 @@ def google_callback(request: Request, state: str = '', code: str = '', error: st
     return response
 
 
+@app.post('/api/channels/{slug}/meta/connect', dependencies=[Admin])
+def connect_meta(slug: str):
+    from .meta_oauth import issue_ticket
+    try:
+        return {'url': issue_ticket(slug)}
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+
+
+class MetaSelection(BaseModel):
+    account_id: str = Field(pattern=r'^\d+$', max_length=128)
+
+
+@app.post('/api/channels/{slug}/meta/select', dependencies=[Admin])
+def select_meta(slug: str, payload: MetaSelection):
+    from .meta_oauth import select_account
+    try:
+        return select_account(slug, payload.account_id)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+
+
+@app.get('/auth/meta/start')
+def meta_start(ticket: str):
+    from .meta_oauth import begin
+    try:
+        state, url = begin(ticket)
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+    response = RedirectResponse(url)
+    response.set_cookie('meta_oauth_state', state, max_age=600, httponly=True,
+                        secure=boot().meta_redirect_uri.startswith('https:'), samesite='lax', path='/auth/meta')
+    response.headers.update({'Cache-Control':'no-store', 'Referrer-Policy':'no-referrer'})
+    return response
+
+
+@app.get('/auth/meta/callback', response_class=HTMLResponse)
+def meta_callback(request: Request, state: str = '', code: str = '', error: str = ''):
+    from .meta_oauth import complete
+    from html import escape
+    try:
+        if error or not code:
+            raise ValueError('Meta access was not granted. Return to Publishing and reconnect.')
+        slug = complete(state, request.cookies.get('meta_oauth_state',''), code)
+        message = f'Access received for {slug}. Return to Publishing, refresh connections and select the Instagram account within 10 minutes. Nothing has been published.'
+        status_code = 200
+    except ValueError as exc:
+        message, status_code = str(exc), 400
+    except Exception:
+        message, status_code = 'Meta connection failed. Check app setup and reconnect from Publishing.', 502
+    response = HTMLResponse('<!doctype html><html><head><title>Instagram connection</title></head>'
+        '<body style="font:18px system-ui;background:#f6f7f4;color:#203847;padding:60px">'
+        '<h1>Instagram connection</h1><p>' + escape(message) + '</p></body></html>', status_code=status_code)
+    response.delete_cookie('meta_oauth_state', path='/auth/meta')
+    response.headers.update({'Cache-Control':'no-store', 'Referrer-Policy':'no-referrer'})
+    return response
+
+
 @app.post('/api/videos/{video_id}/upload-flow', dependencies=[Admin])
 def upload_flow(video_id: str):
     from .social import route_upload
@@ -1173,6 +1231,15 @@ def publish_video(video_id: str, platform: str):
     from .social import request_publish
     try:
         return request_publish(video_id, platform)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+
+
+@app.post('/api/videos/{video_id}/instagram/approve', dependencies=[Admin])
+def approve_instagram(video_id: str):
+    from .social import request_publish
+    try:
+        return request_publish(video_id, 'instagram', approve=True)
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
 

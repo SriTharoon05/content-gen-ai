@@ -19,12 +19,12 @@ export default function Integrations() {
     setBusy(true); setError(''); setMessage('')
     try { await action() } catch (e) { setError(e.message) } finally { setBusy(false) }
   }
-  const connect = async (slug) => {
+  const connect = async (slug, platform='youtube') => {
     const popup = window.open('about:blank', '_blank')
     if (popup) popup.opener = null
     await run(async () => {
       try {
-        const result = await api.connectYoutube(slug)
+        const result = await (platform === 'meta' ? api.connectMeta(slug) : api.connectYoutube(slug))
         if (popup) popup.location.href = result.url
         else window.location.assign(result.url)
       } catch (e) { popup?.close(); throw e }
@@ -50,6 +50,16 @@ export default function Integrations() {
         <div className="row"><button className="btn primary" disabled={busy || !c.youtube_oauth_configured} onClick={() => connect(c.channel)}>{c.youtube ? 'Reconnect YouTube' : 'Connect YouTube'}</button>
         <button className="btn" disabled={busy || !c.youtube} onClick={() => run(async () => setReport(await api.analytics(c.channel)))}>Analytics</button></div>
         <p className="dim tiny">Instagram: {c.instagram ? 'Configured · manual upload only' : 'Setup pending · no upload tests'}</p>
+        {c.instagram_account_name && <p><b>@{c.instagram_account_name}</b> · {c.instagram_account_id}</p>}
+        {c.meta_error && <p className="note err">{c.meta_error}</p>}
+        <button className="btn" disabled={busy || !c.meta_oauth_configured} onClick={()=>connect(c.channel,'meta')}>{c.instagram?'Reconnect Instagram':'Connect Instagram'}</button>
+        {!c.meta_oauth_configured && <p className="dim tiny">Set META_APP_ID and META_APP_SECRET on Render.</p>}
+        {!!c.meta_accounts?.length && <div className="note info" style={{marginTop:12}}><b>Select the Instagram account for {c.channel}</b>
+          {c.meta_accounts.map(a=><p key={a.id}><button className="btn" disabled={busy} onClick={()=>run(async()=>{
+            if(!window.confirm(`Connect @${a.name} (${a.id}) to ${c.channel}?`))return
+            await api.selectMeta(c.channel,a.id);await refresh();setMessage('Instagram connected. No content was published.')
+          })}>@{a.name} · {a.page_name}</button></p>)}
+        </div>}
       </div>)}
     </div>
     {report && <div className="card"><h3>YouTube daily analytics · last 28 days</h3>
@@ -62,9 +72,15 @@ export default function Integrations() {
       {videos.map(v => {
         const connection = data?.channels.find(c => c.channel === v.channel)
         const publication = data?.publications.find(p => p.video_id === v.id && p.platform === 'youtube')
+        const instagramPublication = data?.publications.find(p => p.video_id === v.id && p.platform === 'instagram')
         return <div className="upload-row" key={v.id}>
           <div><b>{v.title || 'Untitled video'}</b><div className="dim tiny">{v.channel} · {v.state.replaceAll('_',' ').toLowerCase()}{publication ? ` · YouTube ${publication.status}` : ''}</div></div>
           <div className="row">
+            {!instagramPublication && <button className="btn" disabled={busy || !connection?.instagram} onClick={()=>run(async()=>{
+              if(!window.confirm(`Publish this Reel to Instagram @${connection.instagram_account_name || connection.instagram_account_id || v.channel}?`))return
+              await api.approveInstagram(v.id);await refresh();setMessage('Instagram Reel upload queued.')
+            })}>Publish to Instagram</button>}
+            {instagramPublication && <span className="pill">Instagram: {instagramPublication.status}</span>}
             {!publication && <button className="btn" disabled={busy || !connection?.youtube} onClick={() => run(async () => {
               if (!data?.review_before_upload && !window.confirm(`Upload this existing video to ${connection.youtube_channel_name || v.channel} as ${data.youtube_privacy}?`)) return
               const result = await api.uploadFlow(v.id); await refresh(); setMessage(result.status === 'awaiting_approval' ? 'Waiting for your review. Select Approve & upload when ready.' : `YouTube: ${result.status}`)

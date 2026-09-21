@@ -1,5 +1,35 @@
 # Deploying to Render + Vercel + Supabase
 
+## Meta connection setup (2026-09-22)
+
+The app now implements **Instagram API with Facebook Login**, not Instagram Login. A professional
+Instagram account must be linked to a Facebook Page. No live Meta consent or upload has been tested.
+
+1. Deploy the updated backend and frontend. Backend startup creates `meta_connections` and blocks
+   Supabase browser roles from reading it, including outside production mode.
+2. Render Environment: set `META_APP_ID`, `META_APP_SECRET`,
+   `META_REDIRECT_URI=https://story-shorts-api.onrender.com/auth/meta/callback`, and `META_API_VERSION=v25.0`.
+   A local `.env` does not configure Render. Never expose these values through Vercel `VITE_` variables.
+3. Meta developer app: configure Facebook Login and register the exact HTTPS callback above.
+   Grant `pages_show_list`, `pages_read_engagement`, `instagram_basic`, `instagram_content_publish`.
+   Development-mode users need the appropriate app roles; broader access may require Meta review,
+   business verification, a privacy policy and data-deletion instructions. The app does not implement
+   a Meta data-deletion callback; do not register the OAuth callback as a deletion callback.
+4. Publishing & analytics → channel → Connect Instagram → grant relevant Page/account access.
+   Return to the dashboard and choose the exact account within ten minutes. Connecting does not publish.
+5. Finished stories → Publish to Instagram → confirm the destination. Review, job and duplicate guards
+   remain active. Instagram stays manual; the existing autonomous scheduler still uploads only YouTube.
+
+Page tokens and temporary account candidates are encrypted at rest. OAuth links/state expire after ten
+minutes, are one-use, and callback state is browser-bound. Existing environment-token mappings remain a
+fallback until a saved connection exists. Reconnect on token revocation or expiration; no claim of permanent
+token validity is made. Keep `OAUTH_ENCRYPTION_KEY` stable if configured; otherwise Meta encryption derives
+from `META_APP_SECRET`, separately from the existing Google-secret encryption. Rotating that secret requires
+Meta reconnection. Setting a new shared encryption key also requires reconnecting existing YouTube accounts.
+
+Local validation: 72 offline tests and frontend build passed. These do not establish Meta app approval or
+provider-side upload success. Reference: [Meta's Facebook Login API collection](https://www.postman.com/meta/instagram/folder/u4g5a2a/instagram-api-with-facebook-login).
+
 ## Dashboard-owned channels and manual publishing
 
 Channels & Runs → Create new channel accepts a stable unique lowercase ID, display name, tagline, niche, topic ideas, instructions and narrator/conversation format. Existing profiles show effective channel instructions read-only; Edit channel → Save channel persists changes immediately (separate from global Save All). Startup preserves those edits. Custom instructions feed idea selection and every creative role; generation limits and safety constraints remain fixed. A one-run topic and direction are passed to idea selection instead of being ignored.
