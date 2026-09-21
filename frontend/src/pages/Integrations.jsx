@@ -52,17 +52,18 @@ export default function Integrations() {
         <p className="dim tiny">Instagram: {c.instagram ? 'Configured · manual upload only' : 'Setup pending · no upload tests'}</p>
         {c.instagram_account_name && <p><b>@{c.instagram_account_name}</b> · {c.instagram_account_id}</p>}
         {c.meta_error && <p className="note err">{c.meta_error}</p>}
-        <button className="btn" disabled={busy || !c.meta_oauth_configured} onClick={()=>connect(c.channel,'meta')}>{c.instagram?'Reconnect Instagram':'Connect Instagram'}</button>
+        <button className="btn" disabled={busy || !c.meta_oauth_configured} onClick={()=>connect(c.channel,'meta')}>{c.instagram?'Reconnect Instagram':'Connect Instagram directly'}</button>
+        <button className="btn" disabled={busy || !c.instagram} onClick={()=>run(async()=>setReport(await api.instagramAnalytics(c.channel)))}>Instagram insights</button>
+        <p className="dim tiny">Direct Instagram Login · professional account · no Facebook Page required.</p>
         {!c.meta_oauth_configured && <p className="dim tiny">Set META_APP_ID and META_APP_SECRET on Render.</p>}
-        {!!c.meta_accounts?.length && <div className="note info" style={{marginTop:12}}><b>Select the Instagram account for {c.channel}</b>
-          {c.meta_accounts.map(a=><p key={a.id}><button className="btn" disabled={busy} onClick={()=>run(async()=>{
-            if(!window.confirm(`Connect @${a.name} (${a.id}) to ${c.channel}?`))return
-            await api.selectMeta(c.channel,a.id);await refresh();setMessage('Instagram connected. No content was published.')
-          })}>@{a.name} · {a.page_name}</button></p>)}
-        </div>}
       </div>)}
     </div>
-    {report && <div className="card"><h3>YouTube daily analytics · last 28 days</h3>
+    {report?.platform === 'instagram' && <div className="card"><h3>Instagram insights · {report.channel}</h3>
+      <p className="dim">{report.start} to {report.end} (end exclusive)</p>
+      {Object.entries(report.summary || {}).map(([key,value])=><p key={key}><b>{key.replaceAll('_',' ')}:</b> {value ?? 'Unavailable'}</p>)}
+      {!Object.keys(report.summary || {}).length && <p>No insights returned for this account/date range.</p>}
+    </div>}
+    {report && report.platform !== 'instagram' && <div className="card"><h3>YouTube daily analytics · last 28 days</h3>
       <div className="table-scroll"><table><thead><tr>{(report.columnHeaders || []).map(c => <th key={c.name}>{c.name}</th>)}</tr></thead>
         <tbody>{(report.rows || []).map((r,i) => <tr key={i}>{r.map((v,j) => <td key={j}>{v}</td>)}</tr>)}</tbody></table></div>
       {!report.rows?.length && <p>No metrics returned for this period.</p>}

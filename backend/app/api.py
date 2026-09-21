@@ -1159,28 +1159,15 @@ def connect_meta(slug: str):
         raise HTTPException(422, str(error)) from error
 
 
-class MetaSelection(BaseModel):
-    account_id: str = Field(pattern=r'^\d+$', max_length=128)
-
-
-@app.post('/api/channels/{slug}/meta/select', dependencies=[Admin])
-def select_meta(slug: str, payload: MetaSelection):
-    from .meta_oauth import select_account
-    try:
-        return select_account(slug, payload.account_id)
-    except ValueError as error:
-        raise HTTPException(422, str(error)) from error
-
-
 @app.get('/auth/meta/start')
 def meta_start(ticket: str):
     from .meta_oauth import begin
     try:
-        state, url = begin(ticket)
+        nonce, url = begin(ticket)
     except ValueError as error:
         raise HTTPException(400, str(error)) from error
     response = RedirectResponse(url)
-    response.set_cookie('meta_oauth_state', state, max_age=600, httponly=True,
+    response.set_cookie('oauth_meta', nonce, max_age=600, httponly=True,
                         secure=boot().meta_redirect_uri.startswith('https:'), samesite='lax', path='/auth/meta')
     response.headers.update({'Cache-Control':'no-store', 'Referrer-Policy':'no-referrer'})
     return response
@@ -1193,8 +1180,8 @@ def meta_callback(request: Request, state: str = '', code: str = '', error: str 
     try:
         if error or not code:
             raise ValueError('Meta access was not granted. Return to Publishing and reconnect.')
-        slug = complete(state, request.cookies.get('meta_oauth_state',''), code)
-        message = f'Access received for {slug}. Return to Publishing, refresh connections and select the Instagram account within 10 minutes. Nothing has been published.'
+        slug = complete(state, request.cookies.get('oauth_meta',''), code)
+        message = f'Instagram connected to {slug}. You can close this tab and return to Publishing. Nothing has been published.'
         status_code = 200
     except ValueError as exc:
         message, status_code = str(exc), 400
@@ -1203,7 +1190,7 @@ def meta_callback(request: Request, state: str = '', code: str = '', error: str 
     response = HTMLResponse('<!doctype html><html><head><title>Instagram connection</title></head>'
         '<body style="font:18px system-ui;background:#f6f7f4;color:#203847;padding:60px">'
         '<h1>Instagram connection</h1><p>' + escape(message) + '</p></body></html>', status_code=status_code)
-    response.delete_cookie('meta_oauth_state', path='/auth/meta')
+    response.delete_cookie('oauth_meta', path='/auth/meta')
     response.headers.update({'Cache-Control':'no-store', 'Referrer-Policy':'no-referrer'})
     return response
 
@@ -1215,6 +1202,17 @@ def upload_flow(video_id: str):
         return route_upload(video_id, explicit=True)
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
+
+
+@app.get('/api/channels/{slug}/instagram/analytics', dependencies=[Admin])
+def instagram_analytics(slug: str, days: int = 28):
+    from .meta_oauth import insights
+    try:
+        return insights(slug, days)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+    except Exception:
+        raise HTTPException(502, 'Instagram insights unavailable. Check Insights permission and reconnect.') from None
 
 
 @app.post('/api/videos/{video_id}/youtube/verify', dependencies=[Admin])

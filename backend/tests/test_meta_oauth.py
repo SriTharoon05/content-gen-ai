@@ -28,9 +28,14 @@ class MetaTests(unittest.TestCase):
         row = SimpleNamespace(phase='meta_ticket', channel_slug='lorehush', expires_at=datetime.now(timezone.utc)+timedelta(minutes=5))
         db = self.db(row)
         with patch.object(meta,'boot',return_value=self.env()), patch.object(meta,'session_scope',return_value=db):
-            state, url = meta.begin('ticket')
+            nonce, url = meta.begin('ticket')
         query = parse_qs(urlsplit(url).query)
-        self.assertEqual(query['state'],[state])
+        self.assertNotEqual(query['state'],[nonce])
+        self.assertEqual(urlsplit(url).hostname,'www.instagram.com')
+        self.assertEqual(query['enable_fb_login'],['0'])
+        attempt = db.__enter__.return_value.add.call_args.args[0]
+        self.assertEqual(attempt.verifier,meta.digest(nonce))
+        self.assertEqual(attempt.id,meta.digest(query['state'][0]))
         self.assertEqual(query['redirect_uri'],['https://example.test/auth/meta/callback'])
         self.assertNotIn('test-secret',url)
         db.__enter__.return_value.delete.assert_called_once_with(row)
@@ -41,44 +46,56 @@ class MetaTests(unittest.TestCase):
             meta.begin('ticket')
 
     def test_state_mismatch_never_calls_provider(self):
-        with patch.object(meta.httpx,'Client') as client, self.assertRaises(ValueError):
+        row = SimpleNamespace(phase='ig_consent',verifier=meta.digest('expected'),expires_at=datetime.now(timezone.utc)+timedelta(minutes=5))
+        with patch.object(meta,'boot',return_value=self.env()),patch.object(meta,'session_scope',return_value=self.db(row)),patch.object(meta.httpx,'Client') as client, self.assertRaises(ValueError):
             meta.complete('a','b','code')
         client.assert_not_called()
 
-    def test_complete_encrypts_candidates_without_auto_selecting(self):
-        attempt = SimpleNamespace(phase='meta_consent',channel_slug='lorehush',expires_at=datetime.now(timezone.utc)+timedelta(minutes=5))
+    def test_complete_connects_directly_with_encrypted_token(self):
+        attempt = SimpleNamespace(phase='ig_consent',verifier=meta.digest('nonce'),channel_slug='lorehush',expires_at=datetime.now(timezone.utc)+timedelta(minutes=5))
         row = SimpleNamespace(pending_encrypted='', pending_until=None, account_id='old-account')
         db = self.db(None)
         db.__enter__.return_value.get.side_effect = [attempt,row]
         client = MagicMock()
         response = lambda body: SimpleNamespace(status_code=200,json=lambda:body)
-        client.__enter__.return_value.post.side_effect = [response({'access_token':'short'}),response({'access_token':'long'})]
-        client.__enter__.return_value.get.side_effect = [response({'data':[{'permission':p,'status':'granted'} for p in meta.SCOPES]}),
-            response({'data':[{'id':'42','name':'Page','access_token':'page-secret','instagram_business_account':{'id':'99','username':'lore'}}]})]
+        client.__enter__.return_value.post.return_value = response({'access_token':'short','user_id':99})
+        client.__enter__.return_value.get.side_effect = [response({'access_token':'ig-secret','expires_in':5184000}),
+            response({'user_id':'99','username':'lore'})]
         with patch.object(meta,'boot',return_value=self.env()),patch.object(meta,'session_scope',return_value=db),patch.object(meta.httpx,'Client',return_value=client):
-            self.assertEqual(meta.complete('state','state','code'),'lorehush')
-            self.assertNotIn('page-secret',row.pending_encrypted)
-            self.assertEqual(meta.pending_accounts(row)[0]['id'],'99')
-        self.assertEqual(row.account_id,'old-account')
-
-    def test_account_selection_is_scoped_encrypted_and_one_use(self):
-        with patch.object(meta,'boot',return_value=self.env()):
-            encrypted = meta.cipher().encrypt(json.dumps([{'id':'99','name':'lore','page_id':'42','page_name':'Page','token':'page-secret'}]).encode()).decode()
-            row = SimpleNamespace(pending_encrypted=encrypted,pending_until=datetime.now(timezone.utc)+timedelta(minutes=5))
-            with patch.object(meta,'session_scope',return_value=self.db(row)):
-                with self.assertRaises(ValueError): meta.select_account('lorehush','100')
-                result = meta.select_account('lorehush','99')
-                self.assertEqual(result,{'account_id':'99','account_name':'lore'})
-                self.assertNotIn('page-secret',row.token_encrypted)
-                self.assertEqual(meta.credentials('lorehush')['instagram_access_token'],'page-secret')
-                with self.assertRaises(ValueError): meta.select_account('lorehush','99')
+            self.assertEqual(meta.complete('state','nonce','code'),'lorehush')
+            self.assertNotIn('ig-secret',row.token_encrypted)
+            self.assertEqual(meta.cipher().decrypt(row.token_encrypted.encode()),b'ig-secret')
+        self.assertEqual(row.account_id,'99')
+        self.assertEqual(row.pending_encrypted,'')
 
     def test_pending_status_never_returns_tokens(self):
-        row = SimpleNamespace(account_id='',account_name='',pending_encrypted='',pending_until=None)
-        with patch.object(meta,'boot',return_value=self.env()),patch.object(meta,'session_scope',return_value=self.db(row)),patch.object(meta,'pending_accounts',return_value=[{'id':'99','name':'lore','page_name':'Page','token':'secret'}]):
+        row = SimpleNamespace(account_id='',account_name='',pending_encrypted='',pending_until=None,token_encrypted='')
+        with patch.object(meta,'boot',return_value=self.env()),patch.object(meta,'session_scope',return_value=self.db(row)):
             result = meta.connection_status('lorehush')
         self.assertNotIn('secret',json.dumps(result))
 
     def test_instagram_credentials_do_not_depend_on_google(self):
         with patch.object(meta,'credentials',return_value={'instagram_account_id':'99','instagram_access_token':'secret'}),patch.object(social,'credentials',side_effect=ValueError('Google unavailable')):
             self.assertEqual(social.instagram_credentials('lorehush')['instagram_account_id'],'99')
+
+    def test_refresh_near_expiry_without_repeated_identity_request(self):
+        with patch.object(meta,'boot',return_value=self.env()):
+            row = SimpleNamespace(login_mode='instagram',account_id='99',token_encrypted=meta.cipher().encrypt(b'old').decode(),token_expires_at=datetime.now(timezone.utc)+timedelta(days=2))
+            response = SimpleNamespace(status_code=200,json=lambda:{'access_token':'fresh','expires_in':5184000})
+            with patch.object(meta,'session_scope',return_value=self.db(row)),patch.object(meta.httpx,'get',return_value=response) as refresh,patch.object(meta,'graph') as identity:
+                self.assertEqual(meta.credentials('lorehush',validate=True)['instagram_access_token'],'fresh')
+                refresh.assert_called_once()
+                identity.assert_not_called()
+
+    def test_old_facebook_and_expired_tokens_rejected(self):
+        for mode,expiry in [('facebook',datetime.now(timezone.utc)+timedelta(days=60)),('instagram',datetime.now(timezone.utc)-timedelta(seconds=1))]:
+            row = SimpleNamespace(login_mode=mode,token_encrypted='unused',token_expires_at=expiry)
+            with patch.object(meta,'session_scope',return_value=self.db(row)),self.assertRaises(ValueError):
+                meta.credentials('lorehush')
+
+    def test_secret_exchange_urls_are_redacted(self):
+        import logging
+        record = logging.LogRecord('httpx',20,'',1,'HTTP GET %s',('https://graph.instagram.com/access_token?client_secret=SECRET&access_token=TOKEN',),None)
+        meta.TokenURLFilter().filter(record)
+        self.assertNotIn('SECRET',record.getMessage())
+        self.assertNotIn('TOKEN',record.getMessage())

@@ -220,27 +220,23 @@ def verify_youtube_publication(video_id):
             'processing': processing, 'warning': warning}
 
 
-def instagram_credentials(slug):
+def instagram_credentials(slug, validate=False):
     from .meta_oauth import credentials as meta_credentials
-    saved = meta_credentials(slug)
-    if saved:
-        return saved
-    mapping = json.loads(boot().social_channels_json).get(slug, {})
-    return {k:mapping.get(k, '') for k in ('instagram_access_token', 'instagram_account_id')}
+    return meta_credentials(slug, validate=validate)
 
 
 def _instagram(v, p):
     from .publishing_copy import publication_copy
-    c = instagram_credentials(v.channel_slug)
+    c = instagram_credentials(v.channel_slug, validate=True)
     if not c.get('instagram_access_token') or not c.get('instagram_account_id'):
         raise ValueError('Connect Instagram for this channel first')
     if not storage.is_supabase_url(v.output_path):
         raise ValueError('Instagram requires a persisted Supabase video')
-    base = f"https://graph.facebook.com/{boot().instagram_graph_version}"
+    base = f"https://graph.instagram.com/{boot().instagram_graph_version}"
     headers = {"Authorization": "Bearer " + c["instagram_access_token"]}
     with httpx.Client(timeout=60) as client:
         r = client.post(f"{base}/{c['instagram_account_id']}/media", headers=headers,
-            data={"media_type": "REELS", "video_url": v.output_path, "caption": publication_copy(v)['instagram_caption']})
+            data={"media_type": "REELS", "video_url": v.output_path, "caption": publication_copy(v)['instagram_caption'], "share_to_feed":"true"})
         r.raise_for_status()
         container = r.json()["id"]
         _update(p.id, session_url=container)

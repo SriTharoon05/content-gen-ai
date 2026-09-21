@@ -1,7 +1,7 @@
-"""Facebook Login for Instagram: one-use browser state, encrypted Page tokens, explicit selection."""
+"""Direct Instagram Login: no Facebook Pages, one-use state and independent browser nonce."""
 import base64
 import hashlib
-import json
+import logging
 import re
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -16,7 +16,20 @@ from .db import session_scope
 from .models import Channel, OAuthAttempt, MetaConnection
 from .youtube_oauth import digest
 
-SCOPES = ['pages_show_list', 'pages_read_engagement', 'instagram_basic', 'instagram_content_publish']
+SCOPES = ['instagram_business_basic', 'instagram_business_content_publish', 'instagram_business_manage_insights']
+
+
+class TokenURLFilter(logging.Filter):
+    def filter(self, record):
+        message = record.getMessage()
+        if 'graph.instagram.com' in message:
+            record.msg = re.sub(r'(https://graph\.instagram\.com/[^\s?"\']+)\?[^\s"\']+', r'\1?[redacted]', message)
+            record.args = ()
+        return True
+
+
+# Instagram's long-token endpoints require secrets in query parameters; never log their URLs.
+logging.getLogger('httpx').addFilter(TokenURLFilter())
 
 
 def cipher():
@@ -55,98 +68,74 @@ def issue_ticket(slug):
 
 def begin(ticket):
     env, _ = config()
-    state = secrets.token_urlsafe(32)
+    state, nonce = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
     with session_scope() as s:
         row = s.get(OAuthAttempt, digest(ticket), with_for_update=True)
         if not row or row.phase != 'meta_ticket' or row.expires_at < datetime.now(timezone.utc):
             raise ValueError('Meta connection link expired; start again from Publishing')
         slug = row.channel_slug
         s.delete(row)
-        s.add(OAuthAttempt(id=digest(state), channel_slug=slug, phase='meta_consent',
+        s.add(OAuthAttempt(id=digest(state), channel_slug=slug, phase='ig_consent', verifier=digest(nonce),
                           expires_at=datetime.now(timezone.utc) + timedelta(minutes=10)))
-    return state, f'https://www.facebook.com/{env.instagram_graph_version}/dialog/oauth?' + urlencode({
+    return nonce, 'https://www.instagram.com/oauth/authorize?' + urlencode({
         'client_id':env.meta_app_id, 'redirect_uri':env.meta_redirect_uri, 'response_type':'code',
-        'state':state, 'scope':','.join(SCOPES), 'auth_type':'rerequest'})
+        'state':state, 'scope':','.join(SCOPES), 'enable_fb_login':'0', 'force_authentication':'1'})
 
 
 def checked(response):
-    if response.status_code != 200 or 'error' in response.json():
+    try:
+        data = response.json()
+    except ValueError:
+        raise ValueError('Instagram returned an invalid response; reconnect and try again') from None
+    if not isinstance(data, dict) or response.status_code != 200 or 'error' in data:
         # Never expose provider URLs, codes or token-bearing payloads to logs/UI.
-        raise ValueError('Meta request failed. Check app permissions, callback URL and account access, then reconnect.')
-    return response.json()
+        raise ValueError('Instagram request failed. Check permissions, token expiry and callback URL, then reconnect.')
+    return data
+
+
+def graph(method, path, token, **params):
+    if not re.fullmatch(r'(me|\d+)(/insights)?', path):
+        raise ValueError('Invalid Instagram resource')
+    return checked(httpx.request(method, f'https://graph.instagram.com/{boot().instagram_graph_version}/{path}',
+        headers={'Authorization':'Bearer ' + token}, params=params if method == 'GET' else None,
+        data=params if method != 'GET' else None, timeout=30))
 
 
 def complete(state, cookie, code):
-    if not state or not cookie or not secrets.compare_digest(state, cookie):
+    if not state or not cookie:
         raise ValueError('Meta browser state mismatch; reconnect from Publishing')
     env, _ = config()
     with session_scope() as s:
         row = s.get(OAuthAttempt, digest(state), with_for_update=True)
-        if not row or row.phase != 'meta_consent' or row.expires_at < datetime.now(timezone.utc):
+        if (not row or row.phase != 'ig_consent' or row.expires_at < datetime.now(timezone.utc)
+                or not secrets.compare_digest(row.verifier, digest(cookie))):
             raise ValueError('Meta session expired or already used')
         slug = row.channel_slug
         s.delete(row)
-    base = f'https://graph.facebook.com/{env.instagram_graph_version}'
     with httpx.Client(timeout=30) as client:
-        short = checked(client.post(base + '/oauth/access_token', data={
+        short = checked(client.post('https://api.instagram.com/oauth/access_token', data={
             'client_id':env.meta_app_id, 'client_secret':env.meta_app_secret,
-            'redirect_uri':env.meta_redirect_uri, 'code':code}))
-        long = checked(client.post(base + '/oauth/access_token', data={
-            'grant_type':'fb_exchange_token', 'client_id':env.meta_app_id,
-            'client_secret':env.meta_app_secret, 'fb_exchange_token':short['access_token']}))
+            'grant_type':'authorization_code', 'redirect_uri':env.meta_redirect_uri, 'code':code}))
+        long = checked(client.get('https://graph.instagram.com/access_token', params={
+            'grant_type':'ig_exchange_token', 'client_secret':env.meta_app_secret,
+            'access_token':short['access_token']}))
         headers = {'Authorization':'Bearer ' + long['access_token']}
-        granted = checked(client.get(base + '/me/permissions', headers=headers))
-        permissions = {p['permission'] for p in granted.get('data',[]) if p.get('status') == 'granted'}
-        if not set(SCOPES).issubset(permissions):
-            raise ValueError('Grant Page listing/read and Instagram basic/publishing permissions, then reconnect')
-        accounts, after = [], None
-        for _ in range(20):
-            params = {'fields':'id,name,access_token,instagram_business_account{id,username}', 'limit':100}
-            if after:
-                params['after'] = after
-            result = checked(client.get(base + '/me/accounts', headers=headers, params=params))
-            for page in result.get('data',[]):
-                ig = page.get('instagram_business_account') or {}
-                if ig.get('id') and page.get('access_token'):
-                    accounts.append({'id':ig['id'], 'name':ig.get('username') or page['name'],
-                                     'page_id':page['id'], 'page_name':page['name'], 'token':page['access_token']})
-            paging = result.get('paging',{})
-            if not paging.get('next'):
-                break
-            after = paging.get('cursors',{}).get('after')
-            if not after:
-                raise ValueError('Cannot finish listing Pages; reconnect with fewer selected Pages')
-        else:
-            raise ValueError('Too many Pages; reconnect granting only the relevant Pages')
-    if not accounts:
-        raise ValueError('No linked professional Instagram account found. Link it to a Facebook Page and grant access to that Page.')
+        account = checked(client.get(f'https://graph.instagram.com/{env.instagram_graph_version}/me',
+                          headers=headers, params={'fields':'user_id,username'}))
+    if not account.get('user_id') or not account.get('username'):
+        raise ValueError('Instagram did not return a professional account identity')
+    expiry = datetime.now(timezone.utc) + timedelta(seconds=int(long['expires_in']))
     with session_scope() as s:
         row = s.get(MetaConnection, slug, with_for_update=True)
         if not row:
             row = MetaConnection(channel_slug=slug)
             s.add(row)
-        row.pending_encrypted = cipher().encrypt(json.dumps(accounts).encode()).decode()
-        row.pending_until = datetime.now(timezone.utc) + timedelta(minutes=10)
-    return slug
-
-
-def pending_accounts(row):
-    if not row.pending_encrypted or not row.pending_until or row.pending_until < datetime.now(timezone.utc):
-        return []
-    return json.loads(cipher().decrypt(row.pending_encrypted.encode()).decode())
-
-
-def select_account(slug, account_id):
-    with session_scope() as s:
-        row = s.get(MetaConnection, slug, with_for_update=True)
-        matches = [a for a in pending_accounts(row) if a['id'] == account_id] if row else []
-        if not matches:
-            raise ValueError('Account selection expired or invalid; reconnect Meta')
-        account = matches[0]
-        row.token_encrypted = cipher().encrypt(account['token'].encode()).decode()
-        row.account_id, row.account_name, row.page_id = account['id'], account['name'], account['page_id']
+        row.token_encrypted = cipher().encrypt(long['access_token'].encode()).decode()
+        row.account_id, row.account_name = str(account['user_id']), account['username']
+        row.login_mode, row.page_id = 'instagram', ''
+        row.token_expires_at = expiry
         row.pending_encrypted, row.pending_until = '', None
-        return {'account_id':row.account_id, 'account_name':row.account_name}
+    return slug
 
 
 def connection_status(slug):
@@ -157,16 +146,40 @@ def connection_status(slug):
         if row:
             result.update(instagram_account_name=row.account_name, instagram_account_id=row.account_id)
             try:
-                result['meta_accounts'] = [{k:a[k] for k in ('id','name','page_name')} for a in pending_accounts(row)]
+                if row.token_encrypted and (row.login_mode != 'instagram' or not row.token_expires_at or row.token_expires_at <= datetime.now(timezone.utc)):
+                    result['meta_error'] = 'Reconnect using direct Instagram Login; the old connection is incompatible or expired'
             except Exception:
                 result['meta_error'] = 'Saved Meta authorization cannot be read; reconnect Meta'
     return result
 
 
-def credentials(slug):
+def credentials(slug, validate=False):
     with session_scope() as s:
-        row = s.get(MetaConnection, slug)
+        row = s.get(MetaConnection, slug, with_for_update=validate)
         if not row or not row.token_encrypted:
             return {}
-        return {'instagram_account_id':row.account_id,
-                'instagram_access_token':cipher().decrypt(row.token_encrypted.encode()).decode()}
+        if row.login_mode != 'instagram' or not row.token_expires_at or row.token_expires_at <= datetime.now(timezone.utc):
+            raise ValueError('Reconnect through direct Instagram Login; this token is expired or from the old Facebook flow')
+        token = cipher().decrypt(row.token_encrypted.encode()).decode()
+        if validate:
+            if row.token_expires_at < datetime.now(timezone.utc) + timedelta(days=7):
+                refreshed = checked(httpx.get('https://graph.instagram.com/refresh_access_token',
+                    params={'grant_type':'ig_refresh_token','access_token':token}, timeout=30))
+                token = refreshed['access_token']
+                row.token_encrypted = cipher().encrypt(token.encode()).decode()
+                row.token_expires_at = datetime.now(timezone.utc) + timedelta(seconds=int(refreshed['expires_in']))
+        return {'instagram_account_id':row.account_id, 'instagram_access_token':token}
+
+
+def insights(slug, days=28):
+    days = max(1, min(30, days))
+    c = credentials(slug, validate=True)
+    if not c:
+        raise ValueError('Connect Instagram first')
+    end = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    start = end - timedelta(days=days)
+    result = graph('GET', c['instagram_account_id'] + '/insights', c['instagram_access_token'],
+                   metric='views,reach,accounts_engaged,total_interactions', metric_type='total_value',
+                   period='day', since=int(start.timestamp()), until=int(end.timestamp()))
+    return {'platform':'instagram', 'channel':slug, 'start':start.date().isoformat(), 'end':end.date().isoformat(),
+            'summary':{item['name']:item.get('total_value',{}).get('value') for item in result.get('data',[])}}

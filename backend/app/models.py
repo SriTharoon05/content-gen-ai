@@ -56,6 +56,8 @@ class MetaConnection(Base):
     account_id: Mapped[str] = mapped_column(String(128), default='')
     account_name: Mapped[str] = mapped_column(String(255), default='')
     page_id: Mapped[str] = mapped_column(String(128), default='')
+    login_mode: Mapped[str] = mapped_column(String(32), default='instagram')
+    token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     pending_encrypted: Mapped[str] = mapped_column(Text, default='')
     pending_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)

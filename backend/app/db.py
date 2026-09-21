@@ -54,6 +54,8 @@ def init_db() -> None:
     # video linkage. Safe on fresh databases and idempotent on existing Supabase projects.
     with engine.begin() as connection:
         connection.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ"))
+        connection.execute(text("ALTER TABLE meta_connections ADD COLUMN IF NOT EXISTS login_mode VARCHAR(32) NOT NULL DEFAULT 'facebook'"))
+        connection.execute(text("ALTER TABLE meta_connections ADD COLUMN IF NOT EXISTS token_expires_at TIMESTAMPTZ"))
         connection.execute(text("ALTER TABLE music_tracks ADD COLUMN IF NOT EXISTS archived BOOLEAN NOT NULL DEFAULT false"))
         connection.execute(text("ALTER TABLE publications ADD COLUMN IF NOT EXISTS requested_privacy VARCHAR(16) NOT NULL DEFAULT 'private'"))
         connection.execute(text("ALTER TABLE publications ADD COLUMN IF NOT EXISTS actual_privacy VARCHAR(16) NOT NULL DEFAULT ''"))
