@@ -1,0 +1,10 @@
+.env
+.venv
+venv
+data
+outputs
+__pycache__
+*.pyc
+app.zip
+models
+tools

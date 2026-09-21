@@ -1,0 +1,35 @@
+services:
+  # Free instances sleep and have ephemeral disks. Supabase holds durable assets and checkpoints.
+  # One service runs the API, worker and scheduler; Supabase Cron wakes it for scheduled runs.
+  - type: web
+    name: story-shorts-api
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: ADMIN_TOKEN
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: APP_ENV
+        value: production
+      - key: OUTPUT_DIR
+        value: /tmp/story-shorts/outputs
+      - key: WORK_DIR
+        value: /tmp/story-shorts/work
+      - key: MEDIA_DIR
+        value: /tmp/story-shorts/media
+      - key: SCHEDULER_TOKEN
+        sync: false
+      - key: RUN_WORKER
+        value: "1"
+      - key: RUN_SCHEDULER
+        value: "1"

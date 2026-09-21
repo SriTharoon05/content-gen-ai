@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+backend/tools/
+*.log
+backend/.env
+backend/data/
+backend/outputs/*.mp4
+backend/models/
+frontend/node_modules/
+frontend/dist/
+.DS_Store
