@@ -30,6 +30,6 @@ services:
       - key: SCHEDULER_TOKEN
         sync: false
       - key: RUN_WORKER
-        value: "1"
+        value: "0"
       - key: RUN_SCHEDULER
-        value: "1"
+        value: "0"
