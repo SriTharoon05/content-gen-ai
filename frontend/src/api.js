@@ -22,7 +22,7 @@ async function request(path, { method = 'GET', body, raw } = {}) {
       body: raw ? body : body ? JSON.stringify(body) : undefined,
     })
   } catch {
-    throw new Error('Cannot reach the backend. Is uvicorn running on port 8000?')
+    throw new Error('Cannot reach the backend. It may be waking up; retry shortly. If this persists, check the API URL and backend health.')
   }
 
   if (response.status === 204) return null
@@ -50,6 +50,7 @@ export const api = {
   instagramAnalytics: (slug) => request(`/channels/${slug}/instagram/analytics`),
   uploadFlow: (id) => request(`/videos/${id}/upload-flow`, { method: 'POST' }),
   verifyYoutube: (id) => request(`/videos/${id}/youtube/verify`, { method: 'POST' }),
+  verifyInstagram: (id) => request(`/videos/${id}/instagram/verify`),
   analytics: (slug) => request(`/channels/${slug}/analytics`),
   publish: (id, platform) => request(`/videos/${id}/publish/${platform}`, { method: 'POST' }),
   health: () => request('/health'),

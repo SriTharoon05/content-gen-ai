@@ -9,10 +9,11 @@ export default function Jobs({ onOpenVideo }) {
   const { notify } = useStore()
   const [jobs, setJobs] = useState(null)
   const [status, setStatus] = useState('')
+  const [error, setError] = useState('')
 
   const load = () => {
     const q = status ? `?status=${status}` : ''
-    api.jobs(q).then((r) => setJobs(r.jobs)).catch(() => setJobs([]))
+    api.jobs(q).then((r) => {setJobs(r.jobs);setError('')}).catch(e => setError(e.message))
   }
   useEffect(() => { load() }, [status])
   useEffect(() => {
@@ -40,7 +41,8 @@ export default function Jobs({ onOpenVideo }) {
         ]} />
       </div>
 
-      <div className="card">
+      {error && <p className="note err" role="alert">{error}</p>}
+      <div className="card table-scroll">
         {jobs === null ? <Empty>Loading…</Empty> : jobs.length === 0 ? <Empty>No jobs match this filter.</Empty> : (
           <table>
             <thead><tr><th>Stage</th><th>Status</th><th>Attempts</th><th>Video</th><th>Error</th><th></th></tr></thead>
@@ -51,8 +53,8 @@ export default function Jobs({ onOpenVideo }) {
                   <td><span className={`pill ${TONE[j.status] || ''}`}>{j.status}</span></td>
                   <td className="tiny">{j.attempts}/{j.max_attempts}</td>
                   <td className="mono tiny clickable" onClick={() => onOpenVideo(j.video_id)}>{j.video_id.slice(0, 8)}</td>
-                  <td className="tiny" style={{ maxWidth: 320, color: j.error ? 'var(--bad)' : undefined }}>{j.error}</td>
-                  <td>{['failed','cancelled'].includes(j.status) && <button className="btn small" onClick={() => retry(j.id)}>Retry</button>}
+                  <td className="tiny job-error">{j.error && <details><summary>{j.error.split('\n')[0].slice(0,140)}</summary><pre>{j.error}</pre></details>}</td>
+                  <td>{['failed','cancelled'].includes(j.status) && (j.stage==='publish'?<button className="btn small" onClick={()=>onOpenVideo(j.video_id)}>Review publication</button>:<button className="btn small" onClick={() => retry(j.id)}>Retry</button>)}
                   {['queued','running'].includes(j.status) && j.stage !== 'publish' && <button className="btn small" onClick={()=>cancel(j.id)}>Cancel queued / expired</button>}</td>
                 </tr>
               ))}

@@ -11,12 +11,13 @@ export default function Videos({ onOpenVideo }) {
   const [videos, setVideos] = useState(null)
   const [channel, setChannel] = useState('')
   const [state, setState] = useState('')
+  const [error, setError] = useState('')
 
   const load = () => {
     const params = new URLSearchParams({ limit: '150', include_variants: 'true' })
     if (channel) params.set('channel', channel)
     if (state) params.set('state', state)
-    api.videos(`?${params}`).then((r) => setVideos(r.videos)).catch(() => setVideos([]))
+    api.videos(`?${params}`).then((r) => {setVideos(r.videos);setError('')}).catch(e => setError(e.message))
   }
 
   useEffect(() => { load() }, [channel, state])
@@ -37,7 +38,8 @@ export default function Videos({ onOpenVideo }) {
           options={STATES.map((s) => ({ value: s, label: s || 'All states' }))} />
       </div>
 
-      <div className="card">
+      {error && <p className="note err" role="alert">{error}</p>}
+      <div className="card table-scroll">
         {videos === null ? <Empty>Loading…</Empty> : videos.length === 0 ? (
           <Empty>No videos match these filters.</Empty>
         ) : (

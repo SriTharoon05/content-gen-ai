@@ -135,6 +135,7 @@ function ImageModelCatalog() {
 export default function Settings() {
   const { settingsDraft: draft, setSetting, setSection, health, choices, channels } = useStore()
   const [token, setLocalToken] = useState(getToken())
+  const [section, setSectionTab] = useState('publishing')
 
   if (!draft) return null
   const setKeys = (key, value) => setSection('keys', { [key]: value })
@@ -143,13 +144,11 @@ export default function Settings() {
     <>
       <h1 className="page-title">Settings</h1>
       <p className="page-sub">
-        Everything here lives in the database, not in .env. Nothing takes effect until Save All, and
-        the whole object is validated as one unit — a rejected save leaves the running config
-        untouched. Opening this page and pressing Save All without changing anything is always a no-op.
+        Defaults for new videos. Changes are saved to the database when you select Save All.
       </p>
-
+      <div className="workspace-tabs" role="tablist" aria-label="Settings sections">{[['publishing','Publishing & schedule'],['content','Content & media'],['providers','Providers & runtime'],['budget','Budget & reuse']].map(([value,label])=><button key={value} role="tab" aria-selected={section===value} className={section===value?'on':''} onClick={()=>setSectionTab(value)}>{label}</button>)}</div>
       <div className="grid cols-2">
-        <div className="card" style={{ gridColumn: '1 / -1' }}>
+        <div className="card" hidden={section!=='providers'} style={{ gridColumn: '1 / -1' }}>
           <h3>API keys</h3>
           <p className="dim tiny" style={{ marginTop: -6, marginBottom: 12 }}>
             A saved key shows as ••••, never the value. Click Replace to swap it — the field only
@@ -175,7 +174,7 @@ export default function Settings() {
           </Field>
         </div>
 
-        <div className="card">
+        <div className="card" hidden={section!=='content'}>
           <h3>Text generation</h3>
           <Field label="Text routing" hint="Every request tries available free keys first, then paid keys, including the audio key.">
             <Select value={draft.models.text_tier} onChange={(v) => setSetting('models', 'text_tier', v)}
@@ -196,7 +195,7 @@ export default function Settings() {
           <p className="dim tiny">Gemini creates content directly: unique concept, script, writing QA, voice, images, captions and render. External fact-checking is disabled; duplicate-content checks remain.</p>
         </div>
 
-        <div className="card">
+        <div className="card" hidden={section!=='content'}>
           <h3>Image model</h3>
           <ImageModelCatalog />
           <Field label="Image endpoint" hint="Pollinations-compatible /v1/images/generations">
@@ -205,7 +204,7 @@ export default function Settings() {
           <Field label="Image size"><Text value={draft.models.image_size} onChange={(v) => setSetting('models', 'image_size', v)} /></Field>
         </div>
 
-        <div className="card">
+        <div className="card" hidden={section!=='content'}>
           <h3>Video & motion</h3>
           <div className="grid cols-2">
             <Field label="Width"><Num value={draft.video.width} onChange={(v) => setSetting('video', 'width', v)} /></Field>
@@ -236,7 +235,7 @@ export default function Settings() {
           </Field>
         </div>
 
-        <div className="card">
+        <div className="card" hidden={section!=='content'}>
           <h3>Voice</h3>
           <Toggle label="Free Gemini TTS first, then Groq" value={draft.voice.free_tts_first ?? true} onChange={(v) => setSetting('voice', 'free_tts_first', v)} hint="Applies to Gemini 2.5 Flash Preview TTS. Uses free Gemini keys, then Groq; no paid Gemini narration fallback." />
           <Field label="Audio generation model" hint="Applies to newly generated narration after Save All.">
@@ -263,7 +262,7 @@ export default function Settings() {
           <Field label="Default pacing note"><Text value={draft.voice.pace_note} onChange={(v) => setSetting('voice', 'pace_note', v)} /></Field>
         </div>
 
-        <div className="card">
+        <div className="card" hidden={section!=='content'}>
           <h3>Languages</h3>
           <Field label="Primary language">
             <Select value={draft.languages.primary} onChange={(v) => setSetting('languages', 'primary', v)}
@@ -275,7 +274,7 @@ export default function Settings() {
           </Field>
         </div>
 
-        <div className="card">
+        <div className="card" hidden={section!=='content'}>
           <h3>Caption alignment</h3>
           <Field label="Provider" hint="Groq's free-tier Whisper handles every listed language, including Tamil, Telugu, Malayalam, Kannada and Hindi.">
             <Select value={draft.align.provider} onChange={(v) => setSetting('align', 'provider', v)}
@@ -290,7 +289,7 @@ export default function Settings() {
           </p>
         </div>
 
-        <div className="card">
+        <div className="card" hidden={section!=='content'}>
           <h3>Music</h3>
           <Toggle label="Use background music by default" value={draft.music.enabled} onChange={(v) => setSetting('music', 'enabled', v)} />
           <Toggle label="Duck music under speech" value={draft.music.ducking} onChange={(v) => setSetting('music', 'ducking', v)} />
@@ -318,7 +317,7 @@ export default function Settings() {
           </Field>
         </div>
 
-        <div className="card">
+        <div className="card" hidden={section!=='budget'}>
           <h3>Reuse</h3>
           <Toggle label="Reuse matching images within the same video" value={draft.reuse.enabled} onChange={(v) => setSetting('reuse', 'enabled', v)}
             hint="Never across different stories — only within one video, matched on exact visible tags." />
@@ -330,7 +329,7 @@ export default function Settings() {
           </Field>
         </div>
 
-        <div className="card">
+        <div className="card" hidden={section!=='budget'}>
           <h3>Pricing</h3>
           <div className="grid cols-2">
             <Field label="USD per credit"><Num value={draft.pricing.credit_price_usd} onChange={(v) => setSetting('pricing', 'credit_price_usd', v)} step={0.001} /></Field>
@@ -354,7 +353,7 @@ export default function Settings() {
           </Field>
         </div>
 
-        <div className="card">
+        <div className="card" hidden={section!=='providers'}>
           <h3>Runtime</h3>
           <div className="grid cols-2">
             <Field label="Worker threads" hint="Videos rendered at once"><Num value={draft.runtime.worker_concurrency} onChange={(v) => setSetting('runtime', 'worker_concurrency', v)} min={1} max={8} /></Field>
@@ -370,18 +369,21 @@ export default function Settings() {
           </p>
         </div>
 
-        <div className="card">
+        <div className="card span-2" hidden={section!=='publishing'}>
           <h3>Publishing & daily schedule</h3>
           <Toggle label="Review before upload" value={draft.publishing?.review_before_upload ?? true}
             onChange={v => setSetting('publishing', 'review_before_upload', v)}
-            hint="On: each finished video waits for your Approve & upload. Off: eligible videos upload automatically when YouTube publishing is enabled. Existing waiting videos are not uploaded retroactively." />
+            hint="On: approve each finished video manually. Off: new eligible videos publish to the destinations below. Existing waiting videos are not uploaded retroactively." />
+          <Field label="Publishing destinations" hint="Used by scheduled runs and runs set to use global destinations. Connect each selected platform before enabling direct publishing.">
+            <Chips value={draft.publishing?.platforms || ['youtube']} onChange={v=>setSetting('publishing','platforms',v)} options={[{value:'youtube',label:'YouTube'},{value:'instagram',label:'Instagram'}]}/>
+          </Field>
           <Field label="YouTube upload visibility">
             <Select value={draft.publishing?.youtube_privacy || 'private'} onChange={v => setSetting('publishing','youtube_privacy',v)}
               options={['private','unlisted','public'].map(value => ({value,label:value}))} />
           </Field>
-          <Toggle label="Enable YouTube publishing after generation" value={draft.schedule.auto_publish}
+          <Toggle label="Enable publishing after generation" value={draft.schedule.auto_publish}
             onChange={(v) => setSetting('schedule', 'auto_publish', v)}
-            hint="Applies to new eligible runs on connected YouTube channels. Review mode still requires approval. Comparison-only runs remain excluded; Instagram is manual." />
+            hint="Uses your selected YouTube / Instagram destinations. Review mode still requires approval; comparison-only runs remain excluded." />
           <Toggle label="Run automatically every day" value={draft.schedule.enabled} onChange={(v) => setSetting('schedule', 'enabled', v)} />
           <Field label="Scheduled channels" hint="Nothing selected = all enabled channels. Select only LoreHush for a single-channel test.">
             <Chips value={draft.schedule.channels || []} onChange={v=>setSetting('schedule','channels',v)} options={channels.filter(c=>c.enabled).map(c=>({value:c.slug,label:c.name || c.slug}))}/>

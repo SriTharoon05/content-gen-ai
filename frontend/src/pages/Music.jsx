@@ -181,7 +181,7 @@ export default function Music() {
       <p className="page-sub">
         Upload beds and crop them to the section you want; each video loops or trims the crop to fit
         automatically. Tracks are organised into category folders — add a new category in Settings →
-        Music, then drop files straight into it as you build the library out.
+        Content & media → Music, then drop files straight into it as you build the library out.
       </p>
 
       <UploadForm onUploaded={reload} />

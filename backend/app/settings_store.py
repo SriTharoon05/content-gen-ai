@@ -162,7 +162,7 @@ DEFAULTS: dict[str, Any] = {
         "daily_credit_ceiling": 0.8,
         "auto_publish": False,
     },
-    "publishing": {"youtube_privacy": "private", "review_before_upload": True},
+        "publishing": {"youtube_privacy": "private", "review_before_upload": True, "platforms": ["youtube"]},
 }
 
 _lock = threading.Lock()
@@ -342,6 +342,9 @@ def validate(candidate: dict) -> list[str]:
     align = candidate["align"]
     if candidate.get("publishing", {}).get("youtube_privacy", "private") not in ("private", "unlisted", "public"):
         problems.append("YouTube privacy must be private, unlisted or public")
+    platforms = candidate.get('publishing', {}).get('platforms', ['youtube'])
+    if not isinstance(platforms, list) or not platforms or any(p not in ('youtube', 'instagram') for p in platforms):
+        problems.append('Choose at least one publishing destination: YouTube or Instagram')
 
     if not 20 <= video["min_shots"] <= video["max_shots"] <= 30:
         problems.append("Shot range must satisfy 20 <= min shots <= max shots <= 30")

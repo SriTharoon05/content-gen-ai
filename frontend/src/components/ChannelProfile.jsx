@@ -18,12 +18,12 @@ export default function ChannelProfile({channel,onCreated,onEditing}) {
       const {topics,slug,...fields}=form
       const body={...fields,topic_seeds:topics.split('\n').map(s=>s.trim()).filter(Boolean)}
       if(creating)await api.createChannel({slug,...body});else await api.patchChannel(channel.slug,body)
-      await refreshChannels();setEditing(false);notify(creating?'Channel created. Connect YouTube before direct publishing.':'Channel instructions saved');onCreated?.()
+      await refreshChannels();setEditing(false);notify(creating?'Channel created. Connect your publishing accounts next.':'Channel instructions saved');onCreated?.()
     }catch(e){notify(e.message,'error')}finally{setBusy(false)}
   }
-  const connect=async()=>{
+  const connect=async(platform)=>{
     const popup=window.open('about:blank','_blank');if(popup)popup.opener=null
-    try{const r=await api.connectYoutube(channel.slug);if(popup)popup.location.href=r.url;else window.location.assign(r.url)}
+    try{const r=await (platform==='instagram'?api.connectMeta(channel.slug):api.connectYoutube(channel.slug));if(popup)popup.location.href=r.url;else window.location.assign(r.url)}
     catch(e){popup?.close();notify(e.message,'error')}
   }
   return <section className={`channel-profile ${editing?'is-editing':''}`}>
@@ -56,7 +56,7 @@ export default function ChannelProfile({channel,onCreated,onEditing}) {
     </div>
     <div className="channel-profile-footer"><div className="row">{editing && <><button className="btn primary" disabled={busy || !form.name.trim() || !form.niche.trim()} onClick={save}>{busy?'Saving…':creating?'Create channel':'Save channel'}</button>
       {!creating && <button className="btn" disabled={busy} onClick={()=>setEditing(false)}>Cancel edits</button>}</>}
-      {!creating && <button className="btn" disabled={editing} onClick={connect}>Connect / change YouTube account</button>}
+      {!creating && <><button className="btn" disabled={editing} onClick={()=>connect('youtube')}>Connect YouTube</button><button className="btn" disabled={editing} onClick={()=>connect('instagram')}>Connect Instagram</button></>}
     </div>
     {editing && <p className="dim tiny">Save this channel before starting a run. Changes affect subsequent generation, not existing rendered videos.</p>}
     </div>

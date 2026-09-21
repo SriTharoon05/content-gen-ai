@@ -7,6 +7,7 @@ import { Field, Num, Select, Slider, Text, Toggle, Chips, Modal, Empty } from '.
 
 const DEFAULT_RUN = {
   publishing_mode: 'review',
+  publish_platforms: null,
   topic: '',
   count: 1,
   target_seconds: 65,
@@ -141,8 +142,9 @@ function ChannelCard({ channel, onOpenVideo }) {
 
       <ChannelProfile channel={channel} onEditing={setEditingProfile}/>
       <div className="grid cols-2">
-        <Field label="Topic for this run" hint="Leave blank to choose from the channel's saved topic ideas"><Text value={run.topic} onChange={v=>set({topic:v})}/></Field>
-        <Field label="After generation" hint="Direct publishing uploads to this channel's connected YouTube account using Settings visibility."><Select value={run.publishing_mode} onChange={v=>set({publishing_mode:v})} options={[{value:'review',label:'Review and approve before upload'},{value:'direct',label:'Publish directly to YouTube'},{value:'settings',label:'Use global publishing settings'}]}/></Field>
+        <Field label="Topic for this run" hint="Leave blank for an original idea based on your channel’s niche and direction."><Text value={run.topic} onChange={v=>set({topic:v})}/></Field>
+        <Field label="After generation" hint="Direct publishing uses the connected accounts selected below."><Select value={run.publishing_mode} onChange={v=>set({publishing_mode:v})} options={[{value:'review',label:'Review and approve'},{value:'direct',label:'Publish directly'},{value:'settings',label:'Use global workflow'}]}/></Field>
+        <Field label="Publishing destinations"><Select value={run.publish_platforms?.join(',') || ''} onChange={v=>set({publish_platforms:v?v.split(','):null})} options={[{value:'',label:'Use Settings destinations'},{value:'youtube',label:'YouTube'},{value:'instagram',label:'Instagram'},{value:'youtube,instagram',label:'YouTube + Instagram'}]}/></Field>
       </div>
       <div className="grid cols-3">
         <div>
@@ -238,7 +240,8 @@ function ChannelCard({ channel, onOpenVideo }) {
 
 export default function Channels({ onOpenVideo }) {
   const { channels, costs, notify, refreshLive } = useStore()
-  const [batch, setBatch] = useState({ videos_per_channel: 2 })
+  const [batch, setBatch] = useState({ videos_per_channel: 2, publishing_mode:'settings', publish_platforms:null })
+  const [selectedChannel, setSelectedChannel] = useState('')
   const [confirmingAll, setConfirmingAll] = useState(false)
   const [runningAll, setRunningAll] = useState(false)
   const [creating,setCreating]=useState(false)
@@ -272,7 +275,7 @@ export default function Channels({ onOpenVideo }) {
         same batch size.
       </p>
 
-      <div className="card" style={{ marginBottom: 18 }}>
+      <details className="card" style={{ marginBottom: 18 }}><summary>Batch run · all {enabledCount} enabled channels</summary>
         <div className="row between">
           <div>
             <b>Start all enabled channels</b>
@@ -280,8 +283,10 @@ export default function Channels({ onOpenVideo }) {
           </div>
           <div className="row">
             <Field label="Videos per channel">
-              <Num value={batch.videos_per_channel} onChange={(v) => setBatch({ videos_per_channel: v })} min={1} max={20} />
+              <Num value={batch.videos_per_channel} onChange={(v) => setBatch(b=>({...b, videos_per_channel:v}))} min={1} max={20} />
             </Field>
+            <Field label="Batch workflow"><Select value={batch.publishing_mode} onChange={v=>setBatch(b=>({...b,publishing_mode:v}))} options={[{value:'settings',label:'Use global workflow'},{value:'review',label:'Review and approve'},{value:'direct',label:'Publish directly'}]}/></Field>
+            <Field label="Batch destinations"><Select value={batch.publish_platforms?.join(',') || ''} onChange={v=>setBatch(b=>({...b,publish_platforms:v?v.split(','):null}))} options={[{value:'',label:'Use Settings destinations'},{value:'youtube',label:'YouTube'},{value:'instagram',label:'Instagram'},{value:'youtube,instagram',label:'YouTube + Instagram'}]}/></Field>
             {confirmingAll ? (
               <>
                 <span className={`pill ${affordableAll ? 'good' : 'bad'}`}>
@@ -299,10 +304,10 @@ export default function Channels({ onOpenVideo }) {
             )}
           </div>
         </div>
-      </div>
-
+      </details>
+      <Field label="Channel workspace" hint="Choose a channel to edit its instructions and start a run."><Select value={selectedChannel || channels[0]?.slug || ''} onChange={setSelectedChannel} options={channels.map(c=>({value:c.slug,label:c.name}))}/></Field>
       {channels.map((channel) => (
-        <ChannelCard key={channel.slug} channel={channel} onOpenVideo={onOpenVideo} />
+        <div key={channel.slug} hidden={channel.slug !== (selectedChannel || channels[0]?.slug)}><ChannelCard channel={channel} onOpenVideo={onOpenVideo} /></div>
       ))}
     </>
   )

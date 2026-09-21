@@ -49,6 +49,7 @@ export function StoreProvider({ children }) {
   const [savedAt, setSavedAt] = useState(null)
   const [toast, setToast] = useState(null)
   const timer = useRef(null)
+  const liveRefresh = useRef(false)
 
   const notify = useCallback((message, kind = 'success') => {
     setToast({ message, kind, id: Date.now() })
@@ -81,10 +82,12 @@ export function StoreProvider({ children }) {
   useEffect(() => { loadAll() }, [loadAll])
 
   const refreshLive = useCallback(async () => {
+    if (liveRefresh.current) return
+    liveRefresh.current = true
     try {
       const [h, k] = await Promise.all([api.health(), api.costs()])
       setHealth(h); setCosts(k)
-    } catch { /* transient; the next poll retries */ }
+    } catch { /* transient; the next poll retries */ } finally { liveRefresh.current = false }
   }, [])
 
   // --- settings draft ------------------------------------------------------

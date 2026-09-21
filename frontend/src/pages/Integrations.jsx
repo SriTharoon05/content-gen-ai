@@ -1,18 +1,25 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api } from '../api'
+import PublishActions from '../components/PublishActions'
 
-export default function Integrations() {
+export default function Integrations({ onOpenVideo }) {
   const [data, setData] = useState(null)
   const [error, setError] = useState('')
   const [report, setReport] = useState(null)
   const [videos, setVideos] = useState([])
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
+  const [tab, setTab] = useState('accounts')
+  const [search, setSearch] = useState('')
+  const [verifiedLinks, setVerifiedLinks] = useState({})
+  const refreshing = useRef(false)
   const refresh = async () => {
+    if (refreshing.current) return
+    refreshing.current = true
     try {
       const [connections, list] = await Promise.all([api.integrations(), api.videos('?limit=150&include_variants=true')])
-      setData(connections); setVideos((list.videos || []).filter(v => ['READY','AWAITING_APPROVAL'].includes(v.state)))
-    } catch (e) { setError(e.message) }
+      setData(connections); setVideos((list.videos || []).filter(v => ['READY','AWAITING_APPROVAL'].includes(v.state))); setError('')
+    } catch (e) { setError(e.message) } finally { refreshing.current = false }
   }
   useEffect(() => { refresh(); const timer = setInterval(refresh, 10000); return () => clearInterval(timer) }, [])
   const run = async (action) => {
@@ -35,72 +42,60 @@ export default function Integrations() {
     <h1 className="page-title">Publishing studio</h1>
     <p className="page-sub">Connect your channels, give each story a final look, and share when it is ready.</p>
     <div className="card publishing-mode row between">
-      <div><span className="eyebrow">CURRENT WORKFLOW</span><h3>{!data ? 'Loading publishing settings…' : data.review_before_upload ? 'Review, approve, then upload' : 'Autonomous YouTube upload'}</h3>
-      <span className="muted">Visibility: <b>{data?.youtube_privacy || '—'}</b> · Publishing after generation: {data?.enabled ? 'enabled' : 'disabled'}. Change these in Settings.</span></div>
+      <div><span className="eyebrow">CURRENT WORKFLOW</span><h3>{!data ? 'Loading publishing settings…' : data.review_before_upload ? 'Review before publishing' : 'Automatic publishing'}</h3>
+      <span className="muted">Destinations: {(data?.platforms || ['youtube']).map(p=>p==='youtube'?'YouTube':'Instagram').join(' + ')} · After generation: {data?.enabled ? 'enabled' : 'disabled'}. Configure in Settings.</span></div>
       <button className="btn" disabled={busy} onClick={refresh}>Refresh connections</button>
     </div>
     {error && <div className="note err" role="alert">{error}</div>}
     {message && <div className="note info" role="status">{message}</div>}
-    <div className="grid cols-3">
+    <div className="workspace-tabs" role="tablist" aria-label="Publishing sections">{[['accounts','Accounts & insights'],['queue','Review & publish'],['history','Publication history']].map(([value,label])=><button key={value} role="tab" aria-selected={tab===value} className={tab===value?'on':''} onClick={()=>setTab(value)}>{label}</button>)}</div>
+    {!data && <p className="muted" role="status">Loading connections and publications…</p>}
+    {tab==='accounts' && <div className="grid cols-3">
       {(data?.channels || []).map(c => <div className="card connection-card" key={c.channel}>
-        <div className="row between"><h3>{c.channel}</h3><span className={`pill ${c.youtube ? 'good' : 'warn'}`}>{c.youtube ? 'Connected' : 'Needs connection'}</span></div>
+        <div className="row between"><h3>{c.channel}</h3><span className="pill">{Number(c.youtube)+Number(c.instagram)}/2 connected</span></div>
+        <div className="platform-section"><div className="row between"><b>YouTube</b><span className={`pill ${c.youtube?'good':'warn'}`}>{c.youtube?'Connected':'Not connected'}</span></div>
         <p className="muted">{c.youtube_channel_name || 'Choose the YouTube account for this channel.'}</p>
         {c.youtube_channel_id && <p className="mono dim">{c.youtube_channel_id}</p>}
         {c.connection_error && <p className="note err">{c.connection_error}</p>}
         <div className="row"><button className="btn primary" disabled={busy || !c.youtube_oauth_configured} onClick={() => connect(c.channel)}>{c.youtube ? 'Reconnect YouTube' : 'Connect YouTube'}</button>
         <button className="btn" disabled={busy || !c.youtube} onClick={() => run(async () => setReport(await api.analytics(c.channel)))}>Analytics</button></div>
-        <p className="dim tiny">Instagram: {c.instagram ? 'Configured · manual upload only' : 'Setup pending · no upload tests'}</p>
+        </div><div className="platform-section"><div className="row between"><b>Instagram</b><span className={`pill ${c.instagram?'good':'warn'}`}>{c.instagram?'Connected':'Not connected'}</span></div>
         {c.instagram_account_name && <p><b>@{c.instagram_account_name}</b> · {c.instagram_account_id}</p>}
         {c.meta_error && <p className="note err">{c.meta_error}</p>}
         <button className="btn" disabled={busy || !c.meta_oauth_configured} onClick={()=>connect(c.channel,'meta')}>{c.instagram?'Reconnect Instagram':'Connect Instagram directly'}</button>
         <button className="btn" disabled={busy || !c.instagram} onClick={()=>run(async()=>setReport(await api.instagramAnalytics(c.channel)))}>Instagram insights</button>
         <p className="dim tiny">Direct Instagram Login · professional account · no Facebook Page required.</p>
         {!c.meta_oauth_configured && <p className="dim tiny">Set META_APP_ID and META_APP_SECRET on Render.</p>}
+        </div>
       </div>)}
-    </div>
-    {report?.platform === 'instagram' && <div className="card"><h3>Instagram insights · {report.channel}</h3>
+    </div>}
+    {tab==='accounts' && report?.platform === 'instagram' && <div className="card analytics-report"><h3>Instagram insights · {report.channel}</h3>
       <p className="dim">{report.start} to {report.end} (end exclusive)</p>
       {Object.entries(report.summary || {}).map(([key,value])=><p key={key}><b>{key.replaceAll('_',' ')}:</b> {value ?? 'Unavailable'}</p>)}
       {!Object.keys(report.summary || {}).length && <p>No insights returned for this account/date range.</p>}
     </div>}
-    {report && report.platform !== 'instagram' && <div className="card"><h3>YouTube daily analytics · last 28 days</h3>
+    {tab==='accounts' && report && report.platform !== 'instagram' && <div className="card analytics-report"><h3>YouTube daily analytics · last 28 days</h3>
       <div className="table-scroll"><table><thead><tr>{(report.columnHeaders || []).map(c => <th key={c.name}>{c.name}</th>)}</tr></thead>
         <tbody>{(report.rows || []).map((r,i) => <tr key={i}>{r.map((v,j) => <td key={j}>{v}</td>)}</tr>)}</tbody></table></div>
       {!report.rows?.length && <p>No metrics returned for this period.</p>}
     </div>}
-    <div className="section-label">Finished stories</div>
-    <div className="card"><h3>Your upload queue</h3><p className="muted tiny">Uses the existing finished video. No scripts, images or audio are regenerated.</p>
-      {videos.map(v => {
+    {tab==='queue' && <div className="card"><h3>Ready for your audience</h3><p className="muted">Review a finished video, then choose where to publish. Existing media is reused.</p>
+      <input type="search" aria-label="Search finished videos" placeholder="Search by title or channel…" value={search} onChange={e=>setSearch(e.target.value)}/>
+      {videos.filter(v=>`${v.title} ${v.channel}`.toLowerCase().includes(search.toLowerCase())).map(v => {
         const connection = data?.channels.find(c => c.channel === v.channel)
-        const publication = data?.publications.find(p => p.video_id === v.id && p.platform === 'youtube')
-        const instagramPublication = data?.publications.find(p => p.video_id === v.id && p.platform === 'instagram')
         return <div className="upload-row" key={v.id}>
-          <div><b>{v.title || 'Untitled video'}</b><div className="dim tiny">{v.channel} · {v.state.replaceAll('_',' ').toLowerCase()}{publication ? ` · YouTube ${publication.status}` : ''}</div></div>
-          <div className="row">
-            {!instagramPublication && <button className="btn" disabled={busy || !connection?.instagram} onClick={()=>run(async()=>{
-              if(!window.confirm(`Publish this Reel to Instagram @${connection.instagram_account_name || connection.instagram_account_id || v.channel}?`))return
-              await api.approveInstagram(v.id);await refresh();setMessage('Instagram Reel upload queued.')
-            })}>Publish to Instagram</button>}
-            {instagramPublication && <span className="pill">Instagram: {instagramPublication.status}</span>}
-            {!publication && <button className="btn" disabled={busy || !connection?.youtube} onClick={() => run(async () => {
-              if (!data?.review_before_upload && !window.confirm(`Upload this existing video to ${connection.youtube_channel_name || v.channel} as ${data.youtube_privacy}?`)) return
-              const result = await api.uploadFlow(v.id); await refresh(); setMessage(result.status === 'awaiting_approval' ? 'Waiting for your review. Select Approve & upload when ready.' : `YouTube: ${result.status}`)
-            })}>{data?.review_before_upload ? 'Send to review' : 'Upload automatically'}</button>}
-            {!publication && data?.review_before_upload && <button className="btn primary" disabled={busy || !connection?.youtube} onClick={() => run(async () => {
-              if (!window.confirm(`Approve this video and upload to ${connection.youtube_channel_name || v.channel} as ${data.youtube_privacy}?`)) return
-              await api.approve(v.id); await refresh(); setMessage('Approved — YouTube upload queued.')
-            })}>Approve & upload</button>}
-          </div>
+          <div><b>{v.title || 'Untitled video'}</b><div className="dim tiny">{v.channel} · {v.state.replaceAll('_',' ').toLowerCase()}</div><button className="btn small ghost" onClick={()=>onOpenVideo(v.id)}>Review video & soundtrack →</button></div>
+          <PublishActions video={v} connection={connection} publications={data?.publications} privacy={data?.youtube_privacy} onPublished={refresh}/>
         </div>
       })}
-      {!videos.length && <p className="muted">Finished videos will appear here.</p>}
-    </div>
-    <div className="section-label">Publication history</div>
-    <div className="card">{(data?.publications || []).map((p,i) => <div className="upload-row" key={i}>
-      <div><b>{p.platform} · {p.status}</b><p className="dim tiny">{p.video_id.slice(0,8)} · requested {p.requested_privacy} · actual {p.actual_privacy || 'not verified'}</p>
+      {!!data && !videos.length && <p className="muted">Finished videos will appear here.</p>}
+    </div>}
+    {tab==='history' && <div className="card"><h3>Publication history</h3>{(data?.publications || []).map((p,i) => <div className="upload-row" key={i}>
+      <div><b>{p.platform==='youtube'?'YouTube':'Instagram'} · {p.status}</b><p className="dim tiny">{videos.find(v=>v.id===p.video_id)?.title || p.video_id.slice(0,8)}{p.platform==='youtube'?` · requested ${p.requested_privacy} · actual ${p.actual_privacy || 'not verified'}`:''}</p>
       {p.error && <p className="note warn">{p.error}</p>}</div>
       {p.remote_id && p.platform === 'youtube' && <div className="row"><a className="btn" href={`https://www.youtube.com/watch?v=${encodeURIComponent(p.remote_id)}`} target="_blank" rel="noreferrer">Open YouTube ↗</a>
       <button className="btn" disabled={busy} onClick={() => run(async () => { const r = await api.verifyYoutube(p.video_id); await refresh(); setMessage(`YouTube visibility: ${r.privacyStatus}; processing: ${r.processing || 'unknown'}`) })}>Check YouTube</button></div>}
-    </div>)}{!data?.publications?.length && <p className="muted">No uploads yet. Your published links and verified visibility will appear here.</p>}</div>
+      {p.remote_id && p.platform === 'instagram' && <div className="row">{verifiedLinks[p.video_id]?<a className="btn" href={verifiedLinks[p.video_id]} target="_blank" rel="noreferrer">Open Instagram ↗</a>:<button className="btn" disabled={busy} onClick={()=>run(async()=>{const r=await api.verifyInstagram(p.video_id);setVerifiedLinks(links=>({...links,[p.video_id]:r.url}));setMessage('Instagram Reel verified. Use Open Instagram to view it.')})}>Check Instagram</button>}</div>}
+    </div>)}{!!data && !data.publications?.length && <p className="muted">No uploads yet. Your publishing results will appear here.</p>}</div>}
   </>
 }

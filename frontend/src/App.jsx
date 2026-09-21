@@ -54,11 +54,10 @@ function Sidebar({ page, setPage, openVideo }) {
           </button>
         ))}
       </div>
-      <div className="sidebar-note"><b>A little story. A lasting impression.</b><p>Create with intention.<br />Share when it feels right.</p></div>
-      <div className="health">
+      <details className="health"><summary>System status</summary>
         <div className="line"><HealthDot ok={health?.ffmpeg} /> FFmpeg {health?.ffmpeg ? 'ready' : 'missing'}</div>
         <div className="line"><HealthDot ok={health?.caption_font} /> Caption font</div>
-        <div className="line"><HealthDot ok={health?.paid_audio_key} /> Paid audio key</div>
+        <div className="line"><HealthDot ok={health?.paid_audio_key || (health?.keys || []).some(k=>['gemini_free','groq'].includes(k.name) && k.healthy>0)} /> Narration keys</div>
         <div className="line">
           <HealthDot ok={health?.alignment?.groq_keys > 0} warn={health?.alignment?.vosk_installed} />
           Alignment: {health?.alignment?.provider === 'groq'
@@ -73,7 +72,7 @@ function Sidebar({ page, setPage, openVideo }) {
           <HealthDot ok={(health?.keys || []).find((k) => k.name === 'pollinations')?.healthy > 0} />
           Image keys
         </div>
-      </div>
+      </details>
     </div>
   )
 }
@@ -170,7 +169,7 @@ export default function App() {
             {page === 'costs' && <Costs />}
             {page === 'jobs' && <Jobs onOpenVideo={goToVideo} />}
             {page === 'settings' && <Settings />}
-            {page === 'integrations' && <Integrations />}
+            {page === 'integrations' && <Integrations onOpenVideo={goToVideo} />}
           </>
         )}
       </div>

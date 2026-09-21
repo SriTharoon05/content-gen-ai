@@ -1,34 +1,62 @@
 # Deploying to Render + Vercel + Supabase
 
+## Instagram publishing and dashboard update (2026-09-22)
+
+- The old local worker sent an empty Instagram bearer token and marked the resulting local protocol
+  failure as `uncertain`. Restart/redeploy the backend to load the saved direct-Instagram credentials.
+- Preparation/container failures are now `failed` and explicitly retryable. An interrupted final
+  publish remains `uncertain` to prevent duplicate posts. Publication claims use a database row lock.
+- Three existing videos were published and independently read back from Instagram:
+  [NowSift](https://www.instagram.com/reel/Ddj7g4IDKoL/),
+  [LoreHush](https://www.instagram.com/reel/Ddj7miGgIui/),
+  [CurioNerve](https://www.instagram.com/reel/Ddj7sZcDrwt/).
+  No new content was generated. Re-approving the published NowSift record created zero extra jobs.
+- Video editor and Publishing → Review & publish share one destination selector and approval control.
+  Account connections/insights and publication history have their own tabs. Instagram history includes
+  Check Instagram → Open Instagram. Channels shows one selected workspace instead of six repeated forms.
+- Settings → Publishing & schedule → Publishing destinations supports YouTube, Instagram or both.
+  Existing installations default to YouTube only; Instagram automation is opt-in. Single-channel and batch
+  runs can override destinations and choose review/direct/global workflow. Review and comparison guards remain.
+  Destination lists use existing JSON settings/options columns; no new schema migration is required for this update.
+- Redeploy both Render and Vercel. Local tests do not establish that hosted workers have the new version.
+  Keep one production worker deployment and do not run an unrestricted local worker against the same queue.
+  New automatic Instagram routing is covered offline; no additional scheduled generation was run for this update.
+- Verification: 94 offline backend tests, production frontend build, 12 live local API reads against Supabase,
+  duplicate-approval guard, desktop page audit and mobile publishing layout passed. Live Instagram uploads
+  were scoped to the three existing videos above. These checks are not a Render Free load/RAM certification.
+
 ## Meta connection setup (2026-09-22)
 
-The app now implements **Instagram API with Facebook Login**, not Instagram Login. A professional
-Instagram account must be linked to a Facebook Page. No live Meta consent or upload has been tested.
+The app implements **Instagram API with Instagram Login** for professional accounts.
+No Facebook Login or linked Facebook Page is required. No live Meta consent or upload has been tested.
 
 1. Deploy the updated backend and frontend. Backend startup creates `meta_connections` and blocks
    Supabase browser roles from reading it, including outside production mode.
 2. Render Environment: set `META_APP_ID`, `META_APP_SECRET`,
    `META_REDIRECT_URI=https://story-shorts-api.onrender.com/auth/meta/callback`, and `META_API_VERSION=v25.0`.
    A local `.env` does not configure Render. Never expose these values through Vercel `VITE_` variables.
-3. Meta developer app: configure Facebook Login and register the exact HTTPS callback above.
-   Grant `pages_show_list`, `pages_read_engagement`, `instagram_basic`, `instagram_content_publish`.
+3. Meta developer app: configure Instagram Login and register the exact HTTPS callback above.
+   Use the Instagram App ID and secret from Instagram API setup, not Facebook Login credentials.
+   Requested scopes: `instagram_business_basic`, `instagram_business_content_publish`,
+   `instagram_business_manage_insights` (availability/access must be confirmed in your Meta app).
    Development-mode users need the appropriate app roles; broader access may require Meta review,
    business verification, a privacy policy and data-deletion instructions. The app does not implement
    a Meta data-deletion callback; do not register the OAuth callback as a deletion callback.
-4. Publishing & analytics → channel → Connect Instagram → grant relevant Page/account access.
-   Return to the dashboard and choose the exact account within ten minutes. Connecting does not publish.
-5. Finished stories → Publish to Instagram → confirm the destination. Review, job and duplicate guards
-   remain active. Instagram stays manual; the existing autonomous scheduler still uploads only YouTube.
+4. Publishing & analytics → channel → Connect Instagram directly → sign in → connected.
+   There is no extra account-selection step. Connecting does not publish.
+5. Publishing → Review & publish → choose Instagram → Approve & publish → confirm the destination.
+   Review, job and duplicate guards remain active. To automate future Instagram uploads, explicitly select
+   Instagram in Settings publishing destinations and configure review/automatic mode.
 
-Page tokens and temporary account candidates are encrypted at rest. OAuth links/state expire after ten
-minutes, are one-use, and callback state is browser-bound. Existing environment-token mappings remain a
-fallback until a saved connection exists. Reconnect on token revocation or expiration; no claim of permanent
-token validity is made. Keep `OAUTH_ENCRYPTION_KEY` stable if configured; otherwise Meta encryption derives
+Instagram user tokens are encrypted at rest. OAuth links/state expire after ten minutes, are one-use,
+and callback state is browser-bound. Saved tokens are refreshed when fewer than seven days remain before
+publishing or fetching insights. Legacy Facebook connections must reconnect; environment Instagram token
+mappings are not used. Reconnect on revocation or expiration. Keep `OAUTH_ENCRYPTION_KEY` stable if configured; otherwise Meta encryption derives
 from `META_APP_SECRET`, separately from the existing Google-secret encryption. Rotating that secret requires
 Meta reconnection. Setting a new shared encryption key also requires reconnecting existing YouTube accounts.
 
-Local validation: 72 offline tests and frontend build passed. These do not establish Meta app approval or
-provider-side upload success. Reference: [Meta's Facebook Login API collection](https://www.postman.com/meta/instagram/folder/u4g5a2a/instagram-api-with-facebook-login).
+Local validation: 74 offline tests and frontend build passed. These do not establish Meta app approval or
+provider-side upload success. Reference: [Meta's Instagram Login API collection](https://www.postman.com/meta/instagram/folder/6raa77c/instagram-api-with-instagram-login).
 
 ## Dashboard-owned channels and manual publishing
 
@@ -121,16 +149,16 @@ Create a Google Cloud project, enable YouTube Data API v3 and YouTube Analytics 
 Set `YOUTUBE_CLIENT_ID`, `YOUTUBE_CLIENT_SECRET`, and `SOCIAL_CHANNELS_JSON` on Render. Example structure (use real secrets only in Render):
 
 ```json
-{"talemorrow":{"youtube_refresh_token":"TOKEN_A","instagram_account_id":"IG_ACCOUNT_A","instagram_access_token":"META_TOKEN_A"},"lorehush":{"youtube_refresh_token":"TOKEN_B"}}
+{"talemorrow":{"youtube_refresh_token":"TOKEN_A"},"lorehush":{"youtube_refresh_token":"TOKEN_B"}}
 ```
 
-For Instagram, use an eligible professional account connected through Meta's Facebook Login flow, grant content publishing permissions including `instagram_content_publish`, obtain a suitable access token and Instagram account ID, and set `INSTAGRAM_GRAPH_VERSION` to your approved supported Graph version. The adapter creates a REELS container from the public Supabase video, polls processing, then publishes. Tokens must be renewed according to Meta policy. Facebook Login tokens are required for this adapter; Instagram Login uses different host/permissions and is not interchangeable.
+For Instagram, follow the direct Instagram Login setup above. The adapter uses `graph.instagram.com`, creates a REELS container from the public Supabase video, polls processing, then publishes. Set `INSTAGRAM_GRAPH_VERSION` (or `META_API_VERSION`) to your supported Graph version. Facebook Login tokens are not interchangeable with direct Instagram Login tokens.
 
 Open Publishing & analytics to connect each YouTube channel and request metrics. `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are accepted alongside the `YOUTUBE_` names. Set `GOOGLE_REDIRECT_URI` to the exact registered callback (`http://localhost:8000/auth/google/callback` locally; `https://<your-render-host>/auth/google/callback` in production). Enable YouTube Data API v3 and YouTube Analytics API in the matching Google project. Select **Connect YouTube** on the correct channel card and grant upload, channel-read and analytics access. Confirm the returned YouTube channel name/ID before publishing. A client ID/secret alone is not a channel authorization.
 
 OAuth uses expiring one-use state, browser binding and PKCE. Refresh tokens are encrypted in the server-only `social_connections` table; RLS and grants block Supabase browser roles. Prefer a dedicated `OAUTH_ENCRYPTION_KEY` (Fernet format), set before connecting channels. If absent, encryption derives from the Google client secret: rotating that secret requires reconnecting channels. Never put secrets in Vercel `VITE_` variables. Keep `ADMIN_TOKEN` mandatory in production.
 
-In Settings → Publishing & daily schedule, **Review before upload** ON makes new edits wait for **Approve & upload**; OFF permits autonomous uploads when **Enable YouTube publishing after generation** is also ON. The worker persists finished assets before queuing the upload. Existing waiting videos are not automatically swept up when settings change. Comparison runs with `auto_publish=false` stay excluded unless explicitly submitted through Publishing. You can send an existing finished video through the current workflow without regenerating content. Instagram is manual and was not included in these upload checks.
+In Settings → Publishing & schedule, **Review before upload** ON makes new edits wait for explicit approval; OFF permits autonomous uploads to the selected destinations when **Enable publishing after generation** is also ON. The worker persists finished assets before queuing the upload. Existing waiting videos are not automatically swept up when settings change. Comparison runs with `auto_publish=false` stay excluded unless explicitly submitted through Publishing. You can send an existing finished video through the current workflow without regenerating content. Instagram is opt-in for automatic publishing; see the latest release checks above.
 
 YouTube visibility is selectable in Settings. Fresh installations default to private; the requested local evaluation uses public. Publication history stores both requested and verified actual visibility, with **Check YouTube** to refresh status. Unverified Google API projects can be restricted to private uploads even when requesting public; an API compliance audit may be required. Google consent verification and the YouTube API upload audit are not interchangeable.
 

@@ -124,10 +124,10 @@ export function Chips({ value = [], onChange, options, max }) {
   return (
     <div className="row tight">
       {options.map((o) => (
-        <span key={String(o.value)} className={`chip ${value.includes(o.value) ? 'on' : ''}`}
+        <button type="button" aria-label={o.label} aria-pressed={value.includes(o.value)} key={String(o.value)} className={`chip ${value.includes(o.value) ? 'on' : ''}`}
           onClick={() => toggle(o.value)}>
           {o.label}
-        </span>
+        </button>
       ))}
     </div>
   )

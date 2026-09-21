@@ -400,6 +400,7 @@ def delete_memory(memory_id: str) -> dict:
 
 class RunOptions(BaseModel):
     publishing_mode: Literal['settings','review','direct'] = 'settings'
+    publish_platforms: list[Literal['youtube','instagram']] | None = Field(default=None, min_length=1, max_length=2)
     count: int = Field(default=1, ge=1, le=20)
     topic: str | None = None
     min_shots: int | None = None
@@ -452,9 +453,11 @@ def run_channel(slug: str, body: RunOptions) -> dict:
         if not session.get(Channel, slug):
             raise HTTPException(404, "Unknown channel")
     if body.publishing_mode == 'direct':
-        from .social import status
-        if not status(slug)['youtube']:
-            raise HTTPException(422,'Connect this channel to YouTube before selecting direct publishing')
+        from .social import status, publishing_platforms
+        connected = status(slug)
+        missing = [p for p in publishing_platforms(body.as_options()) if not connected.get(p)]
+        if missing:
+            raise HTTPException(422,'Connect this channel to ' + ', '.join(missing) + ' before direct publishing')
     check = _affordability(body.count, len(body.languages or []))
     if not check["affordable"]:
         raise HTTPException(402, f"Worst case {check['worst_case_credits']} credits exceeds "
@@ -479,6 +482,13 @@ def run_all(body: BatchRequest) -> dict:
         slugs = [r.slug for r in rows if not body.channels or r.slug in body.channels]
     if not slugs:
         raise HTTPException(400, "No enabled channels selected")
+    if body.publishing_mode == 'direct':
+        from .social import status, publishing_platforms
+        for slug in slugs:
+            connected = status(slug)
+            missing = [p for p in publishing_platforms(body.as_options()) if not connected.get(p)]
+            if missing:
+                raise HTTPException(422, f'Connect {slug} to ' + ', '.join(missing) + ' before direct publishing')
 
     check = _affordability(len(slugs) * body.videos_per_channel, len(body.languages or []))
     if not check["affordable"]:
@@ -1095,6 +1105,7 @@ def integrations():
         channels = s.scalars(select(Channel)).all()
         rows = s.scalars(select(Publication).order_by(Publication.updated_at.desc()).limit(100)).all()
     return {"review_before_upload": cfg('publishing', 'review_before_upload', default=True),
+        "platforms": cfg('publishing', 'platforms', default=['youtube']),
         "youtube_privacy": cfg('publishing', 'youtube_privacy', default='private'),
         "enabled": cfg('schedule', 'auto_publish', default=False),
         "channels": [status(c.slug) for c in channels], "publications": [
@@ -1240,6 +1251,17 @@ def approve_instagram(video_id: str):
         return request_publish(video_id, 'instagram', approve=True)
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
+
+
+@app.get('/api/videos/{video_id}/instagram/verify', dependencies=[Admin])
+def verify_instagram(video_id: str):
+    from .social import verify_instagram_publication, InstagramPublishError
+    try:
+        return verify_instagram_publication(video_id)
+    except (ValueError, InstagramPublishError) as error:
+        raise HTTPException(422, str(error)) from None
+    except Exception:
+        raise HTTPException(502, 'Unable to verify Instagram; retry shortly or check the connection.') from None
 
 
 @app.get("/api/channels/{slug}/analytics", dependencies=[Admin])

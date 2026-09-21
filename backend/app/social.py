@@ -66,6 +66,14 @@ def review_required(video=None):
     return bool(cfg('publishing', 'review_before_upload', default=True))
 
 
+def publishing_platforms(options=None):
+    selected = (options or {}).get('publish_platforms') or cfg('publishing', 'platforms', default=['youtube'])
+    # Old installations have no saved destination list and remain YouTube-only.
+    if not isinstance(selected, list):
+        selected = ['youtube']
+    return list(dict.fromkeys(p for p in selected if p in ('youtube', 'instagram')))
+
+
 def route_upload(video_id, explicit=False):
     """One routing path for finished productions and existing-video submissions."""
     with session_scope() as s:
@@ -81,10 +89,20 @@ def route_upload(video_id, explicit=False):
             return {'status': 'awaiting_approval'}
         v.state = 'READY'
         slug = v.channel_slug
-    # Instagram remains manual until its integration is configured/tested.
-    if not explicit and not status(slug)['youtube']:
-        return {'status': 'not_connected', 'message': 'Connect YouTube in Publishing'}
-    return request_publish(video_id, 'youtube')
+        platforms = publishing_platforms(v.options_json)
+    connections = status(slug) if not explicit else {}
+    results = {}
+    for platform in platforms:
+        if not explicit and not connections.get(platform):
+            results[platform] = {'status':'not_connected', 'message':f'Connect {platform} in Publishing'}
+            continue
+        try:
+            results[platform] = request_publish(video_id, platform)
+        except ValueError as error:
+            results[platform] = {'status':'blocked', 'message':str(error)}
+    if len(results) == 1:
+        return next(iter(results.values()))
+    return {'status':'routed', 'destinations':results}
 
 
 def approve_and_publish(video_id):
@@ -114,10 +132,10 @@ def request_publish(video_id, platform, approve=False):
                 Job.stage.notin_(['produce_video', 'publish']))):
             raise ValueError('Wait for the queued video edits to finish before approving an upload')
         if not status(v.channel_slug)[platform]:
-            raise ValueError(f"Configure {platform} credentials for {v.channel_slug} in SOCIAL_CHANNELS_JSON")
+            raise ValueError(f"Connect {platform} for {v.channel_slug} in Publishing")
         old = s.scalar(select(Publication).where(Publication.video_id == video_id, Publication.platform == platform))
         if old:
-            if old.status == 'blocked' and v.approved:
+            if (old.status == 'blocked' or (platform == 'instagram' and old.status == 'failed')) and v.approved:
                 old.status = 'pending'
                 old.error = ''
                 j = Job(video_id=video_id, stage='publish', payload_json={'platform': platform}, max_attempts=1)
@@ -142,17 +160,17 @@ def _update(pub_id, **fields):
 def publish(video_id, platform):
     with session_scope() as s:
         v = s.get(Video, video_id)
-        p = s.scalar(select(Publication).where(Publication.video_id == video_id, Publication.platform == platform))
-    if not p:
-        raise ValueError('Publication was not queued')
-    if p.status == "published":
-        return {"remote_id": p.remote_id}
-    if p.status in ("uploading", "uncertain"):
-        raise RuntimeError("Previous publish may have succeeded; reconcile remote account before retry")
+        p = s.scalar(select(Publication).where(Publication.video_id == video_id, Publication.platform == platform).with_for_update())
+        if not p:
+            raise ValueError('Publication was not queued')
+        if p.status == "published":
+            return {"remote_id": p.remote_id}
+        if p.status in ("uploading", "uncertain"):
+            raise RuntimeError("Previous publish may have succeeded; reconcile remote account before retry")
+        p.status = 'uploading'
     if v.state != 'READY' or (review_required(v) and not v.approved):
         _update(p.id, status='blocked', error='Review and approve the completed video before upload')
         raise ValueError('Upload blocked by review policy')
-    _update(p.id, status="uploading")
     try:
         remote = _youtube(v, p) if platform == "youtube" else _instagram(v, p)
         _update(p.id, status="published", remote_id=remote, error="")
@@ -162,6 +180,9 @@ def publish(video_id, platform):
             except Exception:
                 _update(p.id, error='Upload accepted; visibility verification pending. Use Check YouTube.')
         return {"remote_id": remote, "platform": platform}
+    except InstagramPublishError as error:
+        _update(p.id, status='uncertain' if error.uncertain else 'failed', error=str(error))
+        raise RuntimeError(str(error)) from None
     except Exception as error:
         # A timeout after a publish request is ambiguous; never automatically create a duplicate.
         _update(p.id, status="uncertain", error=type(error).__name__ + ": provider operation failed; check remote account")
@@ -225,7 +246,63 @@ def instagram_credentials(slug, validate=False):
     return meta_credentials(slug, validate=validate)
 
 
+def verify_instagram_publication(video_id):
+    from urllib.parse import urlsplit
+    with session_scope() as s:
+        v = s.get(Video, video_id)
+        p = s.scalar(select(Publication).where(Publication.video_id == video_id, Publication.platform == 'instagram'))
+    if not v or not p or not p.remote_id:
+        raise ValueError('No published Instagram media ID to verify yet')
+    c = instagram_credentials(v.channel_slug, validate=True)
+    r = httpx.get(f'https://graph.instagram.com/{boot().instagram_graph_version}/{p.remote_id}',
+                  headers={'Authorization':'Bearer ' + c['instagram_access_token']},
+                  params={'fields':'id,permalink,media_type,timestamp'}, timeout=30)
+    result = _instagram_response(r, 'verify publication')
+    link = result.get('permalink','')
+    if urlsplit(link).scheme != 'https' or urlsplit(link).hostname not in ('instagram.com','www.instagram.com'):
+        raise ValueError('Instagram has not returned a valid Reel link yet')
+    return {'remote_id':result['id'], 'url':link}
+
+
+class InstagramPublishError(RuntimeError):
+    def __init__(self, message, uncertain=False):
+        super().__init__(message)
+        self.uncertain = uncertain
+
+
+def _instagram_response(response, stage):
+    """Expose diagnostic codes, never tokens, request URLs or raw provider messages."""
+    try:
+        body = response.json()
+    except ValueError:
+        body = {}
+    error = body.get('error') if isinstance(body, dict) else None
+    if not response.is_success or error:
+        error = error if isinstance(error, dict) else {}
+        codes = ', '.join(f'{key}={error[key]}' for key in ('code', 'error_subcode')
+                          if isinstance(error.get(key), int))
+        hint = 'Check Instagram permissions, media requirements and account publishing limits.'
+        if error.get('code') == 190:
+            hint = 'Instagram authorization expired or was revoked; reconnect this channel.'
+        raise InstagramPublishError(f'Instagram {stage} rejected (HTTP {response.status_code}'
+                                    + (f', {codes}' if codes else '') + f'). {hint}',
+                                    uncertain=stage == 'publish' and response.status_code >= 500)
+    if not isinstance(body, dict) or not body:
+        raise InstagramPublishError(f'Instagram {stage} returned an invalid response.', uncertain=stage == 'publish')
+    return body
+
+
 def _instagram(v, p):
+    # Only errors after media_publish is sent can represent an unknown public post.
+    try:
+        return _instagram_upload(v, p)
+    except InstagramPublishError:
+        raise
+    except Exception:
+        raise InstagramPublishError('Instagram preparation failed; reconnect the channel and retry.') from None
+
+
+def _instagram_upload(v, p):
     from .publishing_copy import publication_copy
     c = instagram_credentials(v.channel_slug, validate=True)
     if not c.get('instagram_access_token') or not c.get('instagram_account_id'):
@@ -237,23 +314,33 @@ def _instagram(v, p):
     with httpx.Client(timeout=60) as client:
         r = client.post(f"{base}/{c['instagram_account_id']}/media", headers=headers,
             data={"media_type": "REELS", "video_url": v.output_path, "caption": publication_copy(v)['instagram_caption'], "share_to_feed":"true"})
-        r.raise_for_status()
-        container = r.json()["id"]
+        result = _instagram_response(r, 'create container')
+        container = result.get('id')
+        if not container:
+            raise InstagramPublishError('Instagram did not return a media container; retry upload.')
         _update(p.id, session_url=container)
         for _ in range(30):
-            r = client.get(f"{base}/{container}", headers=headers, params={"fields": "status_code"})
-            r.raise_for_status()
-            state = r.json().get("status_code")
+            r = client.get(f"{base}/{container}", headers=headers, params={"fields": "status_code,status"})
+            state = _instagram_response(r, 'process container').get("status_code")
             if state == "FINISHED":
                 break
             if state in ("ERROR", "EXPIRED"):
-                raise RuntimeError("Instagram rejected media container")
+                raise InstagramPublishError(f'Instagram media container {state.lower()}; check video format and public media URL.')
             time.sleep(10)
         else:
-            raise RuntimeError("Instagram processing timeout")
-        r = client.post(f"{base}/{c['instagram_account_id']}/media_publish", headers=headers, data={"creation_id": container})
-        r.raise_for_status()
-        return r.json()["id"]
+            raise InstagramPublishError('Instagram processing timed out before publishing; safe to retry.')
+        try:
+            r = client.post(f"{base}/{c['instagram_account_id']}/media_publish", headers=headers, data={"creation_id": container})
+            result = _instagram_response(r, 'publish')
+            if not result.get('id'):
+                raise InstagramPublishError('Instagram publish response had no media ID; check the remote account.', uncertain=True)
+            return result['id']
+        except InstagramPublishError:
+            raise
+        except httpx.LocalProtocolError:
+            raise InstagramPublishError('Instagram request could not be sent; reconnect the channel and retry.') from None
+        except Exception:
+            raise InstagramPublishError('Instagram publish response was interrupted; check the remote account before retrying.', uncertain=True) from None
 
 def analytics(slug, days=28):
     end = date.today() - timedelta(days=1)

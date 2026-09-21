@@ -3,6 +3,7 @@ import { api, mediaUrl, money, moneyShort } from '../api'
 import { useStore } from '../store.jsx'
 import MusicEditor from '../components/MusicEditor'
 import { Field, Num, Select, Slider, Text, Toggle, StatePill, Progress, Modal, Empty } from '../components/ui.jsx'
+import PublishActions from '../components/PublishActions'
 
 function Section({ title, children }) {
   return (
@@ -215,11 +216,16 @@ export default function VideoDetail({ videoId, onClose, onOpenVideo }) {
   const { costs, notify } = useStore()
   const [video, setVideo] = useState(null)
   const [langTab, setLangTab] = useState('primary')
-  const [approving, setApproving] = useState(false)
+  const [publishing, setPublishing] = useState(null)
   const [musicDirty, setMusicDirty] = useState(false)
 
   const load = () => api.video(videoId).then(setVideo).catch((error) => notify(error.message, 'error'))
   useEffect(() => { load() }, [videoId])
+  useEffect(() => {
+    const refresh = () => api.integrations().then(setPublishing).catch(e => notify(e.message,'error'))
+    refresh(); const timer = setInterval(refresh, 15000)
+    return () => clearInterval(timer)
+  }, [videoId])
   useEffect(() => {
     if (!video || ['READY', 'FAILED', 'AWAITING_APPROVAL'].includes(video.state)) return
     const interval = setInterval(load, 4000)
@@ -232,14 +238,8 @@ export default function VideoDetail({ videoId, onClose, onOpenVideo }) {
   const activeVariant = langTab === 'primary' ? null : (video.variants || []).find((v) => v.id === langTab)
   const displayState = activeVariant ? activeVariant.state : video.state
   const displayDone = ['READY', 'AWAITING_APPROVAL'].includes(displayState)
+  const enteredPublishing = publishing?.publications.some(p=>p.video_id===activeId)
 
-  const approve = async () => {
-    if (!window.confirm('Approve this video and upload it to the connected YouTube channel using your saved visibility setting?')) return
-    setApproving(true)
-    try { await api.approve(video.id); notify('Approved — YouTube upload queued'); load() }
-    catch (error) { notify(error.message, 'error') }
-    finally { setApproving(false) }
-  }
   const remove = async () => {
     if (!window.confirm('Delete this video and all its variants, including image comparisons? This cannot be undone.')) return
     try { await api.deleteVideo(video.id); notify('Deleted'); onClose() } catch (error) { notify(error.message, 'error') }
@@ -255,12 +255,14 @@ export default function VideoDetail({ videoId, onClose, onOpenVideo }) {
       <div className="row between" style={{ marginBottom: 6 }}>
         <button className="btn small ghost" onClick={onClose}>← Back</button>
         <div className="row tight">
-          {displayDone && <button className="btn primary small" disabled={approving || musicDirty} onClick={approve}>{approving ? 'Queuing…' : 'Publish to YouTube'}</button>}
           <button className="btn small danger" onClick={remove}>Delete</button>
         </div>
       </div>
       <h1 className="page-title">{video.title || video.topic || 'Untitled video'}</h1>
       <p className="page-sub">{video.channel} · <StatePill state={video.state} /></p>
+      {displayDone && <section className="card publish-panel"><div><h3>Publishing</h3><p className="muted">Choose a destination for this finished version.</p></div>
+        <PublishActions key={activeId} video={{...video,id:activeId}} connection={publishing?.channels.find(c=>c.channel===video.channel)} publications={publishing?.publications} privacy={publishing?.youtube_privacy} disabled={musicDirty} onPublished={async()=>{setPublishing(await api.integrations());load()}}/>
+      </section>}
 
       {(video.variants?.length > 0) && (
         <div className="seg" style={{ marginBottom: 16 }}>
@@ -273,7 +275,8 @@ export default function VideoDetail({ videoId, onClose, onOpenVideo }) {
         </div>
       )}
 
-      {displayDone && langTab === 'primary' && <MusicEditor key={video.output_revision} video={video} onApplied={load} onDirty={setMusicDirty} />}
+      {displayDone && enteredPublishing && <p className="note info">This video has entered publishing. Soundtrack changes are locked; edits here do not replace existing social posts.</p>}
+      {displayDone && publishing && !enteredPublishing && langTab === 'primary' && <MusicEditor key={video.output_revision} video={video} onApplied={load} onDirty={setMusicDirty} />}
       {!displayDone && (
         <div className="card" style={{ marginBottom: 16 }}>
           <div className="row between"><b className="tiny">{displayState.replace(/_/g, ' ')}</b></div>
@@ -291,7 +294,7 @@ export default function VideoDetail({ videoId, onClose, onOpenVideo }) {
             <Empty>Rendering — the player will appear once this version is ready.</Empty>
           )}
           {displayDone && <a className="btn small" style={{ marginTop: 10 }} href={mediaUrl.download(activeId)}>Download</a>}
-          {displayDone && !!video.options?.music_revisions?.length && <p className="note info">Soundtrack applied. Replay is optional; select Publish to YouTube when ready.</p>}
+          {displayDone && !!video.options?.music_revisions?.length && <p className="note info">Soundtrack applied. Publish this version when you’re happy with the mix.</p>}
         </div>
 
         <div className="card">
