@@ -222,6 +222,18 @@ def ensure_clip(image: Path, frames: int, clips_dir: Path, zoom_out: bool = Fals
     return render_clip(image, frames, destination, zoom_out)
 
 
+def cfr_filter(fps: int) -> str:
+    """Restore actual CFR metadata after trim/setpts/concat, before any xfade.
+
+    Output -r cannot repair a filter link during graph configuration. Keep fps AFTER
+    setpts: timestamp filters and concat can leave frame_rate unknown on some FFmpeg builds.
+    AVTB gives both sides of each blend the same time base without retiming narration.
+    """
+    if not isinstance(fps, int) or fps <= 0:
+        raise ValueError('Renderer frame rate must be a positive integer')
+    return f'setpts=PTS-STARTPTS,fps={fps}:start_time=0,settb=AVTB'
+
+
 def assemble(
     images: list[Path],
     narration: Path,
@@ -278,19 +290,20 @@ def assemble(
         # loop the bed so a 60-90 second track always covers the whole video
         args += ["-stream_loop", "-1", "-i", str(music.resolve())]
 
-    filters = [f"[{i}:v]fps={fps},settb=AVTB,setpts=PTS-STARTPTS[v{i}]" for i in range(len(clips))]
+    timing = cfr_filter(fps)
+    filters = [f"[{i}:v]{timing}[v{i}]" for i in range(len(clips))]
     video = "v0"
     for index in range(1, len(clips)):
         label = f"chain{index}"
         if not timeline.blends[index]:
-            filters.append(f"[{video}][v{index}]concat=n=2:v=1:a=0,settb=AVTB[{label}]")
+            filters.append(f"[{video}][v{index}]concat=n=2:v=1:a=0,{timing}[{label}]")
         else:
             kind = transitions[index].get("kind", "crossfade") if index < len(transitions) else "crossfade"
             effect = XFADE.get(kind, "fade")
             filters.append(
                 f"[{video}][v{index}]xfade=transition={effect}:"
                 f"duration={timeline.blends[index] / fps:.4f}:offset={timeline.starts[index] / fps:.4f},"
-                f"settb=AVTB[{label}]"
+                f"{timing}[{label}]"
             )
         video = label
 
@@ -355,6 +368,7 @@ def transition_segments(clips, timeline, transitions, work):
     """
     pieces = []
     fps = timeline.fps
+    timing = cfr_filter(fps)
     for i, clip in enumerate(clips):
         incoming = timeline.blends[i]
         outgoing = timeline.blends[i + 1] if i + 1 < len(clips) else 0
@@ -362,15 +376,15 @@ def transition_segments(clips, timeline, transitions, work):
         if end > incoming:
             path = work / f'body-{i:03d}.mp4'
             run([binary('ffmpeg'), '-y', '-v', 'error', '-i', str(clip.resolve()),
-                 '-vf', f'trim=start_frame={incoming}:end_frame={end},setpts=PTS-STARTPTS',
+                 '-vf', f'trim=start_frame={incoming}:end_frame={end},{timing}',
                  '-an', '-c:v', 'libx264', '-threads', '1', '-preset', 'veryfast', '-crf', '21',
                  '-pix_fmt', 'yuv420p', '-r', str(fps), '-frames:v', str(end - incoming), str(path.resolve())])
             pieces.append(path)
         if outgoing:
             path = work / f'boundary-{i:03d}.mp4'
             effect = XFADE[transitions[i + 1]['kind']]
-            filters = (f'[0:v]trim=start_frame={end}:end_frame={timeline.frames[i]},setpts=PTS-STARTPTS,settb=AVTB[a];'
-                       f'[1:v]trim=end_frame={outgoing},setpts=PTS-STARTPTS,settb=AVTB[b];'
+            filters = (f'[0:v]trim=start_frame={end}:end_frame={timeline.frames[i]},{timing}[a];'
+                       f'[1:v]trim=end_frame={outgoing},{timing}[b];'
                        f'[a][b]xfade=transition={effect}:duration={outgoing/fps:.9f}:offset=0,format=yuv420p[v]')
             run([binary('ffmpeg'), '-y', '-v', 'error', '-filter_complex_threads', '1',
                  '-i', str(clip.resolve()), '-i', str(clips[i + 1].resolve()), '-filter_complex', filters,
@@ -387,7 +401,7 @@ def assemble_bounded(clips, narration, captions, output, timeline, music, intens
     duration = timeline.duration
     args = [binary("ffmpeg"), "-y", "-v", "error", "-filter_complex_threads", "1",
             "-f", "concat", "-safe", "0", "-i", str(listing.resolve()), "-i", str(narration.resolve())]
-    vf = f"fps={timeline.fps},setpts=PTS-STARTPTS,subtitles=filename={captions.name}:fontsdir=fonts,format=yuv420p"
+    vf = f"{cfr_filter(timeline.fps)},subtitles=filename={captions.name}:fontsdir=fonts,format=yuv420p"
     filters = [f"[0:v]{vf}[film]", f"[1:a]aresample=48000:first_pts=0,apad,atrim=duration={duration:.6f},asetpts=PTS-STARTPTS[voice]"]
     if music and music.exists() and intensity > 0:
         args += ["-ss", str(max(0.0, music_start)), "-stream_loop", "-1", "-i", str(music.resolve())]

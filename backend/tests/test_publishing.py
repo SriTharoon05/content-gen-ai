@@ -29,6 +29,8 @@ class PublishingTests(unittest.TestCase):
 
     def test_autonomous_mode_queues_without_approval(self):
         video = self.video()
+        # This test targets YouTube only, regardless of saved dashboard destinations.
+        video.options_json = {'publish_platforms': ['youtube']}
         context, _ = self.db(video)
         with patch.object(social, 'session_scope', return_value=context), patch.object(social, 'review_required', return_value=False), patch.object(social, 'request_publish', return_value={'status':'pending'}) as upload:
             self.assertEqual(social.route_upload('v', explicit=True)['status'], 'pending')
