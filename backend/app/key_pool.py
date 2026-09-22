@@ -16,6 +16,7 @@ POOL_SOURCES = {
     "gemini_paid": ("keys", "gemini_paid"),
     "pollinations": ("keys", "pollinations"),
     "groq": ("keys", "groq"),
+    "groq_text": ("keys", "groq"),
 }
 
 
@@ -58,6 +59,20 @@ class KeyPool:
             wait = max(0.0, live[index] - time.time())
         time.sleep(min(wait, COOLDOWN_SECONDS))
         return index, self._keys[index]
+
+    def retry_rounds(self, rounds: int = 3):
+        """Ordered, bounded attempts. Never bypass a key's Retry-After deadline."""
+        for round_number in range(rounds):
+            if round_number:
+                with self._lock:
+                    if len(self._dead) == len(self._keys):
+                        return
+                time.sleep(COOLDOWN_SECONDS)
+            for index, key in enumerate(self._keys):
+                with self._lock:
+                    available = index not in self._dead and self._cooldown.get(index, 0) <= time.time()
+                if available:
+                    yield index, key
 
     def penalise(self, index: int, seconds: int = COOLDOWN_SECONDS) -> None:
         with self._lock:

@@ -163,7 +163,7 @@ class ProductionTests(unittest.TestCase):
                 return type('Response',(),{'text':'OK','usage_metadata':None})()
             client.models.generate_content.side_effect=call
             return client
-        with patch('app.llm.cfg',return_value=True), patch('app.llm.pool',side_effect=lambda name:free if name=='gemini_free' else paid), patch('google.genai.Client',side_effect=client_factory), patch('app.llm._build_config',return_value={}):
+        with patch('app.llm._groq_text',side_effect=NoKeysConfigured('none')), patch('app.llm.cfg',return_value=True), patch('app.llm.pool',side_effect=lambda name:free if name=='gemini_free' else paid), patch('google.genai.Client',side_effect=client_factory), patch('app.llm._build_config',return_value={}):
             self.assertEqual(generate_text('hello'),'OK')
         self.assertEqual(seen,[('f1','gemini-3.1-flash-lite'),('f2','gemini-3.1-flash-lite'),('p1','gemini-3.1-flash-lite')])
 

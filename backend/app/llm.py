@@ -7,6 +7,8 @@ import json
 import logging
 import re
 import time
+from types import SimpleNamespace
+import httpx
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Type, TypeVar
@@ -25,6 +27,7 @@ _current_stage: ContextVar[str] = ContextVar("current_stage", default="agent")
 
 THINKING_BUDGET = {"low": 512, "medium": 4096, "high": 16384}
 TEXT_MODEL = "gemini-3.1-flash-lite"
+GROQ_TEXT_MODEL = "openai/gpt-oss-120b"
 
 
 @contextmanager
@@ -43,7 +46,7 @@ class TextGenerationError(RuntimeError):
     pass
 
 
-def _record_usage(model: str, response, tier: str = "free") -> None:  # noqa: ANN001
+def _record_usage(model: str, response, tier: str = "free", provider: str = "gemini_text") -> None:  # noqa: ANN001
     video_id = _current_video.get()
     usage = getattr(response, "usage_metadata", None)
     if not usage:
@@ -68,7 +71,7 @@ def _record_usage(model: str, response, tier: str = "free") -> None:  # noqa: AN
                     id=new_id(),
                     video_id=video_id or "",
                     idempotency_key=f"text:{new_id()}",
-                    provider="gemini_text",
+                    provider=provider,
                     model=model,
                     status="settled",
                     credits=0.0,
@@ -106,12 +109,66 @@ def _build_config(system: str, temperature: float, json_mode: bool):  # noqa: AN
     return types.GenerateContentConfig(**kwargs)
 
 
+def _groq_text(prompt: str, system: str, temperature: float, json_mode: bool) -> str:
+    keys = pool('groq_text')
+    last_error = 'No available Groq text keys'
+    for index, key in keys.retry_rounds(rounds=3):
+        body = {'model': GROQ_TEXT_MODEL, 'temperature': temperature,
+                'reasoning_effort': 'low', 'max_completion_tokens': 4096,
+                'messages': [{'role': 'system', 'content': system or 'You are a helpful assistant.'},
+                             {'role': 'user', 'content': prompt}]}
+        if json_mode:
+            body['response_format'] = {'type': 'json_object'}
+            body['messages'][0]['content'] += '\nReturn only valid JSON.'
+        try:
+            response = httpx.post('https://api.groq.com/openai/v1/chat/completions',
+                headers={'Authorization': 'Bearer ' + key}, json=body, timeout=180)
+            if response.status_code in (401, 403):
+                keys.mark_dead(index)
+                last_error = f'Groq text HTTP {response.status_code}'
+                continue
+            if response.status_code == 429:
+                # These credentials have independent quotas: cool only this key.
+                try:
+                    delay = min(86400, max(65, float(response.headers.get('retry-after', '65'))))
+                except ValueError:
+                    delay = 65
+                keys.penalise(index, delay)
+                last_error = 'Groq text key quota exhausted'
+                continue
+            if response.status_code >= 400:
+                last_error = f'Groq text HTTP {response.status_code}'
+                keys.penalise(index)
+                continue
+            data = response.json()
+            usage = data.get('usage') or {}
+            _record_usage(GROQ_TEXT_MODEL, SimpleNamespace(usage_metadata=SimpleNamespace(
+                prompt_token_count=usage.get('prompt_tokens', 0),
+                candidates_token_count=usage.get('completion_tokens', 0))), provider='groq_text')
+            choice = data['choices'][0]
+            text = (choice['message'].get('content') or '').strip()
+            if text and choice.get('finish_reason') != 'length':
+                return text
+            last_error = 'Groq text returned empty or truncated output'
+            keys.penalise(index)
+        except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as error:
+            last_error = f'Groq text request failed ({type(error).__name__})'
+            keys.penalise(index)
+    raise TextGenerationError(last_error)
+
+
 def generate_text(prompt: str, system: str = "", temperature: float = 0.9, json_mode: bool = True) -> str:
     from google import genai
 
     last_error: Exception | None = None
     model = TEXT_MODEL
-    for tier in (("free", "paid") if cfg("models", "allow_paid_text_fallback", default=True) else ("free",)):
+    for tier in (("free", "groq", "paid") if cfg("models", "allow_paid_text_fallback", default=True) else ("free", "groq")):
+        if tier == 'groq':
+            try:
+                return _groq_text(prompt, system, temperature, json_mode)
+            except (TextGenerationError, NoKeysConfigured) as error:
+                last_error = error
+                continue
         keys = pool("gemini_" + tier)
         for attempt in range(len(keys) if tier == "free" else max(2, len(keys))):
             try:
@@ -140,6 +197,9 @@ def generate_text(prompt: str, system: str = "", temperature: float = 0.9, json_
                     keys.mark_dead(index)
                     continue
                 if is_rate_limited(error):
+                    keys.penalise(index)
+                    continue
+                if any(marker in str(error).lower() for marker in ('503', 'unavailable', 'high demand', '502', '504')):
                     keys.penalise(index)
                     continue
                 time.sleep(min(12.0, 1.5 * (attempt + 1)))

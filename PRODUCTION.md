@@ -231,3 +231,17 @@ For local evaluation only, `WORKER_CREATED_AFTER` can limit job pickup/recovery 
 - Render/Vercel deployment, external Cron wakeup, live final-video caption review, publishing, and analytics still need their deployment/account acceptance checks. Do not treat this release as fully production-verified until those pass.
 
 Provider references: [Gemini pricing](https://ai.google.dev/gemini-api/docs/pricing#gemini-3.1-flash-lite), [Groq audio timestamps](https://console.groq.com/docs/speech-to-text), [Supabase scheduling](https://supabase.com/docs/guides/functions/schedule-functions), [YouTube resumable uploads](https://developers.google.com/youtube/v3/guides/using_resumable_upload_protocol), [YouTube analytics](https://developers.google.com/youtube/analytics/reference/reports/query).
+# Text provider fallback
+
+Text requests try free Gemini `gemini-3.1-flash-lite`, then Groq
+`openai/gpt-oss-120b`, then paid Gemini only when paid text fallback is enabled.
+Groq text uses the existing Settings Groq keys / `GROQ_API_KEYS` seed; no new
+secret is required. Caption STT continues using the same credentials unchanged.
+Text cooldowns are separate from STT. Groq text keys are configured from independent
+accounts: a failure cools only that key and immediately tries the next available key.
+After a failed round, wait 65 seconds and restart in configured order, at most three
+rounds total (two retries). Longer Retry-After deadlines are respected; invalid
+credentials are skipped. Keys within one organization still share its quota.
+Gemini overload/503 errors cool down failed keys and advance to the fallback.
+Groq JSON output still passes the existing Pydantic validation/repair workflow.
+Deploy the backend changes to Render and the Settings label update to Vercel.

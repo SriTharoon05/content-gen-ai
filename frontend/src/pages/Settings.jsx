@@ -166,7 +166,7 @@ export default function Settings() {
             hint="GEMINI_AUDIO_PAID_KEY funds narration and serves as paid text fallback after free keys fail." />
           <KeyList label="Pollinations keys (image generation)" values={draft.keys.pollinations}
             onChange={(v) => setKeys('pollinations', v)} hint="Add as many as you have; the pool rebuilds on save." />
-          <KeyList label="Groq keys (word alignment for captions)" values={draft.keys.groq}
+          <KeyList label="Groq keys (text fallback, speech and caption alignment)" values={draft.keys.groq}
             onChange={(v) => setKeys('groq', v)} hint="Free-tier Whisper large-v3-turbo. Used instead of the offline aligner when configured." />
           <Field label="Dashboard admin token" hint="Stored in this browser only; applies immediately, not through Save All.">
             <input type="password" value={token}

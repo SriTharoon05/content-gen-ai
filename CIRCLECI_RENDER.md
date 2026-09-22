@@ -76,7 +76,7 @@ CIRCLECI_TOKEN=<CircleCI personal API token>
 CIRCLECI_PROJECT_SLUG=circleci/<organization-id>/<project-id>
 CIRCLECI_PIPELINE_DEFINITION_ID=<pipeline definition ID>
 CIRCLECI_BRANCH=main
-RENDER_WORKER_TOKEN=<same secret as CircleCI>
+RENDER_WORKER_TOKEN=
 REMOTE_RENDER_TIMEOUT_MINUTES=240
 RUN_WORKER=1
 ```
