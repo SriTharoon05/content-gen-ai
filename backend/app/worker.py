@@ -58,6 +58,9 @@ def claim() -> str | None:
 
 
 def dispatch(stage: str, video_id: str, payload: dict) -> dict:
+    if stage == 'build_language':
+        from .pipeline import build_language_variant
+        return build_language_variant(payload['parent_id'], payload['language'])
     if stage == 'change_music':
         from .music_edit import apply
         return apply(video_id, payload)
@@ -92,6 +95,8 @@ def dispatch(stage: str, video_id: str, payload: dict) -> dict:
 
 
 def process(job_id: str) -> None:
+    from .remote_render import current_job, RenderDeferred
+    job_context = current_job.set(job_id)
     with session_scope() as session:
         job = session.get(Job, job_id)
         stage, video_id, payload = job.stage, job.video_id, dict(job.payload_json or {})
@@ -112,10 +117,14 @@ def process(job_id: str) -> None:
     threading.Thread(target=renew, name="job-lease", daemon=True).start()
     try:
         from . import storage
-        if stage != 'publish':
+        if stage != 'publish' and not payload.get('render_task_id'):
             storage.restore(video_id)
-        result = dispatch(stage, video_id, payload)
-        if stage != 'publish':
+        if payload.get('render_task_id'):
+            from .remote_render import finish
+            result = finish(payload['render_task_id'])
+        else:
+            result = dispatch(stage, video_id, payload)
+        if stage != 'publish' and not payload.get('render_task_id'):
             storage.checkpoint(video_id, cleanup=True)
         queue_comparisons(video_id, payload)
         if stage == 'produce_video':
@@ -127,6 +136,12 @@ def process(job_id: str) -> None:
             job.lease_expires_at = None
             job.payload_json = {**(job.payload_json or {}), "result": result}
         log.info("job %s (%s) done", job_id, stage)
+    except RenderDeferred:
+        if payload.get('render_task_id'):
+            with session_scope() as session:
+                row = session.get(Job, job_id)
+                row.status, row.lease_expires_at = 'waiting_render', None
+        log.info('job %s waiting for CircleCI; Render worker released', job_id)
     except Exception as error:  # noqa: BLE001
         try:
             from . import storage
@@ -148,6 +163,7 @@ def process(job_id: str) -> None:
                 video.state = "RETRY" if retryable else "FAILED"
     finally:
         lease_stop.set()
+        current_job.reset(job_context)
 
 
 def queue_comparisons(video_id: str, payload: dict) -> list[str]:
@@ -165,7 +181,7 @@ def queue_comparisons(video_id: str, payload: dict) -> list[str]:
             child = session.get(Video, child_id, with_for_update=True)
             existing = session.scalars(select(Job).where(
                 Job.video_id == child_id, Job.stage == 'image_variant',
-                Job.status.in_(['queued', 'running', 'done']))).first()
+                Job.status.in_(['queued', 'running', 'waiting_render', 'done']))).first()
             if child.state not in ('READY', 'AWAITING_APPROVAL') and not existing:
                 session.add(Job(video_id=child_id, stage='image_variant',
                                 payload_json={}, max_attempts=2))
@@ -186,6 +202,8 @@ def _permanent(error: Exception) -> bool:
 def loop(stop: threading.Event, poll: float = 3.0) -> None:
     while not stop.is_set():
         try:
+            from .remote_render import reconcile
+            reconcile()
             requeue_stuck()
             job_id = claim()
         except Exception as error:  # noqa: BLE001

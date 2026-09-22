@@ -128,7 +128,7 @@ def request_publish(video_id, platform, approve=False):
         if review_required(v) and not v.approved:
             raise ValueError('Review this video and select Approve & upload first')
         if s.scalar(select(Job.id).where(Job.video_id == video_id,
-                Job.status.in_(['queued', 'running']),
+                Job.status.in_(['queued', 'running', 'waiting_render']),
                 Job.stage.notin_(['produce_video', 'publish']))):
             raise ValueError('Wait for the queued video edits to finish before approving an upload')
         if not status(v.channel_slug)[platform]:

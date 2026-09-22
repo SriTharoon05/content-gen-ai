@@ -69,6 +69,24 @@ def apply(video_id, payload):
     start = payload.get('music_start_seconds')
     end = payload.get('music_end_seconds')
     filename = f'{video_id[:8]}-bgm-{uuid.uuid4().hex[:10]}.mp4'
+    from . import remote_render
+    if remote_render.enabled():
+        root = work_dir(video_id)
+        files = {'narration.wav':narration, 'source.mp4':fetch_media(source, root / 'remix-source.mp4')}
+        if track:
+            files['music.audio'] = fetch_media(track['path'], root / 'remix-music.audio')
+        selection = {'music_track':(track or {}).get('id'), 'music_name':(track or {}).get('name'),
+            'music_volume_pct':volume, 'music_intensity':intensity, 'ducking':ducking,
+            'music_start_seconds':float(start if start is not None else (track or {}).get('trim_start',0)),
+            'music_end_seconds':float(end if end is not None else (track or {}).get('trim_end',0))}
+        with session_scope() as s:
+            opts = dict(s.get(Video,video_id).options_json or {})
+        history = list(opts.get('music_revisions',[])) + [{'output':source, 'music':previous}]
+        remote_render.submit(video_id, {'operation':'remix','duration':duration,
+            'music':{**track,'path':'music.audio'} if track else None,
+            'music_start':start, 'music_end':end, 'intensity':intensity, 'ducking':ducking}, files,
+            {'spec':selection, 'duration':duration, 'options':{**selection,'music_enabled':bool(track),
+                'music_revisions':history,'force_review':True,'preview_required':False,'reviewed_output':'','auto_publish':False}})
     with tempfile.TemporaryDirectory(prefix='story-remix-') as folder:
         root = Path(folder)
         original = fetch_media(source, root / 'source.mp4')

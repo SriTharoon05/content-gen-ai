@@ -12,6 +12,20 @@ All without touching anything is a no-op that cannot lose a key.
 import threading
 from copy import deepcopy
 from typing import Any
+from contextvars import ContextVar
+from contextlib import contextmanager
+
+_render_settings = ContextVar('render_settings', default=None)
+
+
+@contextmanager
+def render_settings(snapshot):
+    """A non-secret settings snapshot lets the canonical renderer run without any DB reads."""
+    token = _render_settings.set(snapshot)
+    try:
+        yield
+    finally:
+        _render_settings.reset(token)
 
 from .config import boot
 from .db import session_scope
@@ -212,7 +226,9 @@ def load(force: bool = False) -> dict:
 
 
 def cfg(*path: str, default: Any = None) -> Any:
-    node: Any = load()
+    node: Any = _render_settings.get()
+    if node is None:
+        node = load()
     for key in path:
         if not isinstance(node, dict) or key not in node:
             return default

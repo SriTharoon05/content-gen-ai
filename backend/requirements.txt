@@ -13,3 +13,4 @@ python-dotenv==1.0.1
 vosk==0.3.45
 pgvector>=0.3.6
 cryptography>=44.0.0
+psutil==7.0.0

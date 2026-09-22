@@ -218,6 +218,26 @@ class Decision(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
+class RenderTask(Base):
+    __tablename__ = 'render_tasks'
+    __table_args__ = (CheckConstraint("status IN ('queued','running','succeeded','failed')", name='render_task_status_ck'),)
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    job_id: Mapped[str] = mapped_column(ForeignKey('jobs.id'), unique=True)
+    video_id: Mapped[str] = mapped_column(ForeignKey('videos.id'), index=True)
+    status: Mapped[str] = mapped_column(String(16), default='queued', index=True)
+    manifest_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    continuation_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    result_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    owner_hash: Mapped[str] = mapped_column(String(64), default='')
+    pipeline_id: Mapped[str] = mapped_column(String(64), default='')
+    error: Mapped[str] = mapped_column(Text, default='')
+    trigger_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    next_trigger_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    deadline: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
 class StoryHistory(Base):
     __tablename__ = "story_history"
 

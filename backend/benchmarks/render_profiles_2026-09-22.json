@@ -1,0 +1,17 @@
+{
+  "environment": "Local Docker Desktop Linux, Python 3.12, FFmpeg 7.1.5 Debian 13; NOT a hosted CircleCI benchmark",
+  "fixture": "Existing smoke generators; 25 scenes, synthetic narration and English captions, mixed transitions, cold clips",
+  "output": {"width": 720, "height": 1280, "fps": 30, "duration_seconds": 54.366667, "frames": 1631},
+  "includes": "Media assembly and full decode validation",
+  "excludes": "CI queue/install, network transfers, fixture creation, generation",
+  "memory_method": "20ms cgroup resident sampling excluding inactive file cache; includes Python and FFmpeg",
+  "runs": [
+    {"profile": "low_memory", "limit_mib": 2048, "cpus": 1, "seconds": 182.260, "peak_ram_bytes": 381898752, "cpu_utilization_pct": 99.66, "ffmpeg_passes": 64, "encode_passes": 63, "output_bytes": 4082669},
+    {"profile": "auto", "variant": "selected one-CPU strategy, final repeat", "limit_mib": 2048, "cpus": 1, "seconds": 123.501, "peak_ram_bytes": 367284224, "cpu_utilization_pct": 99.27, "ffmpeg_passes": 27, "encode_passes": 26, "output_bytes": 4037606, "auto_memory_ceiling_bytes": 1610612736},
+    {"profile": "auto", "variant": "first one-scene pass", "limit_mib": 2048, "cpus": 1, "seconds": 116.394, "peak_ram_bytes": 367480832, "cpu_utilization_pct": 99.41, "ffmpeg_passes": 27, "encode_passes": 26, "output_bytes": 4037606},
+    {"profile": "auto", "variant": "four-scene candidate", "limit_mib": 2048, "cpus": 1, "seconds": 118.751, "peak_ram_bytes": 1003937792, "cpu_utilization_pct": 99.64, "ffmpeg_passes": 9, "encode_passes": 8, "output_bytes": 4037606},
+    {"profile": "auto", "variant": "two-scene candidate; concurrent constrained benchmark on same host", "limit_mib": 2048, "cpus": 1, "seconds": 142.428, "peak_ram_bytes": 632631296, "cpu_utilization_pct": 99.51, "ffmpeg_passes": 15, "encode_passes": 14, "output_bytes": 4037606},
+    {"profile": "low_memory", "variant": "constrained safety check; concurrent candidate benchmark on same host", "limit_mib": 512, "cpus": 1, "seconds": 194.053, "peak_ram_bytes": 327454720, "cpu_utilization_pct": 99.71, "ffmpeg_passes": 64, "encode_passes": 63, "output_bytes": 4082669}
+  ],
+  "interpretation": "Selected auto strategy reduced media time by 32.2% versus the 2GiB low_memory baseline. Larger batches did not show a consistent one-CPU advantage across these limited samples. Auto permits 1.5GiB; it does not artificially fill memory. Multi-CPU workers may use larger memory-budgeted batches. No general fastest-render or end-to-end CircleCI time guarantee."
+}

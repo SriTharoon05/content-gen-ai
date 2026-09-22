@@ -86,7 +86,8 @@ def signed_url(bucket: str, key: str, expires_in: int = 3600) -> str:
     )
     if resp.status_code != 200:
         raise RuntimeError(f"Supabase sign failed [{resp.status_code}]: {resp.text[:200]}")
-    return _base() + resp.json()["signedURL"]
+    signed = resp.json()['signedURL']
+    return _base() + '/storage/v1' + signed if signed.startswith('/object/') else _base() + signed
 
 
 # --------------------------------------------------------------------------- helpers

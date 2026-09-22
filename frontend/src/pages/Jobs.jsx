@@ -3,7 +3,7 @@ import { api } from '../api'
 import { useStore } from '../store.jsx'
 import { Select, Empty } from '../components/ui.jsx'
 
-const TONE = { queued: '', running: 'busy', done: 'good', failed: 'bad' }
+const TONE = { queued: '', running: 'busy', waiting_render: 'busy', done: 'good', failed: 'bad' }
 
 export default function Jobs({ onOpenVideo }) {
   const { notify } = useStore()
@@ -37,7 +37,7 @@ export default function Jobs({ onOpenVideo }) {
       <div className="row" style={{ marginBottom: 14 }}>
         <Select value={status} onChange={setStatus} options={[
           { value: '', label: 'All statuses' }, { value: 'queued', label: 'Queued' },
-          { value: 'running', label: 'Running' }, { value: 'done', label: 'Done' }, { value: 'failed', label: 'Failed' },
+          { value: 'running', label: 'Running' }, { value: 'waiting_render', label: 'CircleCI rendering' }, { value: 'done', label: 'Done' }, { value: 'failed', label: 'Failed' },
         ]} />
       </div>
 
@@ -50,7 +50,8 @@ export default function Jobs({ onOpenVideo }) {
               {jobs.map((j) => (
                 <tr key={j.id}>
                   <td className="nowrap">{j.stage}</td>
-                  <td><span className={`pill ${TONE[j.status] || ''}`}>{j.status}</span></td>
+                  <td><span className={`pill ${TONE[j.status] || ''}`}>{j.status === 'waiting_render' ? 'CircleCI rendering' : j.status}</span>
+                    {j.render_task_id && <div className="mono tiny">Task {j.render_task_id.slice(0,8)}</div>}</td>
                   <td className="tiny">{j.attempts}/{j.max_attempts}</td>
                   <td className="mono tiny clickable" onClick={() => onOpenVideo(j.video_id)}>{j.video_id.slice(0, 8)}</td>
                   <td className="tiny job-error">{j.error && <details><summary>{j.error.split('\n')[0].slice(0,140)}</summary><pre>{j.error}</pre></details>}</td>

@@ -19,7 +19,7 @@ BEGIN
   day_key := to_char(start_stamp,'YYYY-MM-DD');
   SELECT EXISTS(SELECT 1 FROM public.schedule_runs WHERE run_date=day_key) INTO claimed;
   SELECT EXISTS(SELECT 1 FROM public.jobs j JOIN public.videos v ON v.id=j.video_id
-    WHERE j.status IN ('queued','running') AND v.options_json->>'scheduled_date'=day_key) INTO pending;
+    WHERE j.status IN ('queued','running','waiting_render') AND v.options_json->>'scheduled_date'=day_key) INTO pending;
   pending := pending OR EXISTS (SELECT 1 FROM public.jobs WHERE stage='verification_backlog'
     AND status IN ('queued','running') AND created_at > now() - interval '4 hours');
   IF claimed AND NOT pending THEN RETURN; END IF;

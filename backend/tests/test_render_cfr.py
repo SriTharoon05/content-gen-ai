@@ -9,6 +9,20 @@ from app.settings_store import DEFAULTS
 
 
 class RenderCFRTests(unittest.TestCase):
+    def test_direct_segments_exact_frame_counts(self):
+        from PIL import Image
+        from app.render_profile import using
+        with tempfile.TemporaryDirectory() as folder, patch('app.settings_store.cfg',side_effect=self.config(30)), using('auto'):
+            work=Path(folder)
+            images=[work/f'{i}.png' for i in range(3)]
+            for path in images:
+                Image.new('RGB',(180,320),'red').save(path)
+            transitions=[{'kind':'hard_cut'}, {'kind':'crossfade'}, {'kind':'crossfade'}]
+            timeline=media.build_timeline([(0,1),(1,2),(2,3)],[{**t,'duration_ms':300} for t in transitions],30,3)
+            pieces=media.direct_segments(images,timeline,transitions,work)
+            actual=[int(media.probe(path)['streams'][0]['nb_frames']) for path in pieces]
+            self.assertEqual(actual,[21,9,21,9,30])
+
     def setUp(self):
         # These regressions must run during image build with no database or provider access.
         guard = patch('app.db.engine.connect', side_effect=AssertionError('Render test attempted database access'))
@@ -62,10 +76,16 @@ class RenderCFRTests(unittest.TestCase):
                                'sine=frequency=440:duration=6',str(voice)])
                     captions=work/'captions.ass'
                     write_ass([{'word':'Timing','start':.2,'end':1.2}],[],set(),captions,6)
-                for bounded in (True,False):
+                from app.render_profile import using
+                for bounded, profile in ((True,'low_memory'),(False,'low_memory'),(True,'auto')):
                     with self.subTest(bounded=bounded), patch('app.settings_store.cfg',side_effect=self.config(fps,bounded)), \
-                         patch.object(media,'ensure_clip',side_effect=clips):
-                        output=work/f'final-{bounded}.mp4'
+                         patch.object(media,'ensure_clip',side_effect=clips), using(profile):
+                        # Auto consumes image sources directly instead of intermediate scene MP4s.
+                        if profile == 'auto':
+                            from PIL import Image
+                            for i in range(6):
+                                Image.new('RGB',(180,320),'blue' if i%2 else 'red').save(work/f'image-{i}.png')
+                        output=work/f'final-{bounded}-{profile}.mp4'
                         media.assemble([work/f'image-{i}.png' for i in range(6)],voice,timeline,
                                        transitions,captions,output,work/'pieces')
                         streams=media.probe(output)['streams']

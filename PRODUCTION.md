@@ -1,5 +1,25 @@
 # Deploying to Render + Vercel + Supabase
 
+## Optional CircleCI media execution
+
+See [CIRCLECI_RENDER.md](CIRCLECI_RENDER.md) for the complete setup, environment variables,
+benchmark method and rollback. The default remains local/low-memory. CircleCI is opt-in and runs
+only checkpointed media tasks; generation, scheduling and publishing remain on Render.
+
+## FFmpeg transition frame-rate fix (2026-09-22)
+
+- Both rendering paths now normalize timestamps, constant frame rate and time base before
+  transitions, including after concatenation. This fixes unknown `1/0` rates rejected by `xfade`.
+  The low-memory renderer still processes only two scene inputs per transition.
+- Synthetic FFmpeg regression tests cover the unknown-rate failure and both rendering modes
+  at 24, 25 and 30 fps, checking frame counts and audio/video duration. Docker builds now run
+  these tests against the image's Linux FFmpeg without database or provider access.
+- Push these changes and redeploy **Render only**; no Vercel change or database migration is needed.
+  Linux/hosted verification remains pending until that build and a hosted render succeed.
+- After deployment, open each failed video in the dashboard and use **Reuse assets → Re-render**
+  to reuse its saved images and narration. Do not start a new content-generation run just to repair
+  this error. Missing alignment/translation caches may still require caption-provider requests.
+
 ## Instagram publishing and dashboard update (2026-09-22)
 
 - The old local worker sent an empty Instagram bearer token and marked the resulting local protocol

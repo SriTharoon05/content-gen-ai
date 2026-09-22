@@ -10,6 +10,7 @@ backend/tools/
 backend/.env
 backend/data/
 backend/outputs/*.mp4
+backend/outputs/circleci-benchmark/
 backend/models/
 frontend/node_modules/
 frontend/dist/

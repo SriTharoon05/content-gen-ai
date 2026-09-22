@@ -65,7 +65,7 @@ def tick():
     result = plan_batch(channels=cfg('schedule','channels',default=[]),
                         scheduled_date=window_start(now).date().isoformat()) if due(now) else {"queued": 0}
     with session_scope() as session:
-        active = session.scalar(select(Job.id).where(Job.status.in_(["queued", "running"])).limit(1))
+        active = session.scalar(select(Job.id).where(Job.status.in_(["queued", "running", "waiting_render"])).limit(1))
     return {**result, "active": bool(active)}
 
 def loop(stop, poll=30):

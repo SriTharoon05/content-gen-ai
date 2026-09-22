@@ -29,6 +29,28 @@ class Boot(BaseSettings):
     wikimedia_user_agent: str = "StoryShorts/1.0 (https://www.mediawiki.org/wiki/API:Etiquette; educational story research)"
     scheduler_token: str = ""
     render_public_url: str = ""
+    render_execution_backend: str = 'local'
+    render_profile: str = 'low_memory'
+    circleci_token: str = ''
+    circleci_project_slug: str = ''
+    circleci_pipeline_definition_id: str = ''
+    circleci_branch: str = 'main'
+    render_worker_token: str = ''
+    remote_render_timeout_minutes: int = 240
+
+    @field_validator('render_execution_backend')
+    @classmethod
+    def _render_backend(cls, value):
+        if value not in ('local', 'circleci'):
+            raise ValueError('RENDER_EXECUTION_BACKEND must be local or circleci')
+        return value
+
+    @field_validator('render_profile')
+    @classmethod
+    def _render_profile(cls, value):
+        if value not in ('low_memory','auto'):
+            raise ValueError('RENDER_PROFILE must be low_memory or auto')
+        return value
     youtube_client_id: str = Field(default="", validation_alias=AliasChoices("YOUTUBE_CLIENT_ID", "GOOGLE_CLIENT_ID"))
     youtube_client_secret: str = Field(default="", validation_alias=AliasChoices("YOUTUBE_CLIENT_SECRET", "GOOGLE_CLIENT_SECRET"))
     google_redirect_uri: str = "http://localhost:8000/auth/google/callback"

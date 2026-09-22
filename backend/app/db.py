@@ -41,7 +41,7 @@ def init_db() -> None:
     # OAuth secrets must never be exposed through Supabase's browser-facing API,
     # including on a local-development backend pointed at the real database.
     with engine.begin() as connection:
-        for table in ('social_connections', 'oauth_attempts', 'meta_connections'):
+        for table in ('social_connections', 'oauth_attempts', 'meta_connections', 'render_tasks'):
             connection.execute(text(f'ALTER TABLE {table} ENABLE ROW LEVEL SECURITY'))
             connection.execute(text(f'REVOKE ALL ON TABLE {table} FROM anon, authenticated'))
     if settings().app_env == "production":

@@ -539,6 +539,14 @@ def build_video(video_id: str, channel: dict, plan: EditPlan, options: dict, bea
     _, pitches = analyze_audio(narration, work)
     alignment = measured.get("alignment") or {}
     if not alignment.get("captions"):
+        if options.get('_reuse_assets'):
+            raise PipelineError('Saved alignment is missing; reuse never calls ASR. Regenerate narration explicitly.')
+        from .remote_render import current_job
+        if current_job.get():
+            with session_scope() as session:
+                from .models import Job
+                if session.get(Job, current_job.get()).stage in ('rerender', 'regenerate_edit', 'change_speed', 'image_variant'):
+                    raise PipelineError('Saved alignment is missing; reuse never calls ASR. Regenerate narration explicitly.')
         transcript = spoken_text(measured.get("tagged_transcript", "")) or " ".join(
             b["narration"] for b in beats
         )
@@ -554,7 +562,13 @@ def build_video(video_id: str, channel: dict, plan: EditPlan, options: dict, bea
     }
     captions = work / "captions.ass"
     from .english_captions import english_captions
-    subtitle_words = english_captions(alignment["captions"], language, work)
+    from .remote_render import current_job
+    reuse = bool(options.get('_reuse_assets'))
+    if current_job.get():
+        with session_scope() as session:
+            from .models import Job
+            reuse = reuse or session.get(Job, current_job.get()).stage in ('rerender', 'regenerate_edit', 'change_speed', 'image_variant')
+    subtitle_words = english_captions(alignment["captions"], language, work, allow_generate=not reuse)
     translated_captions = language.lower().replace('_', '-').split('-')[0] != 'en'
     caption_stats = write_ass(subtitle_words, pitches, emphasis, captions, total, phrase_mode=translated_captions)
     caption_stats['enabled'] = True
@@ -580,6 +594,41 @@ def build_video(video_id: str, channel: dict, plan: EditPlan, options: dict, bea
     model_label = str(options.get('image_model') or cfg('models', 'image_model')).split('/')[-1]
     suffix += f"-{model_label}-{uuid.uuid4().hex[:8]}"
     output = boot().outputs / f"{channel['slug']}-{video_id[:8]}{suffix}.mp4"
+
+    with session_scope() as session:
+        voice = dict(session.get(Video, video_id).voice_json or {})
+    render_spec = {
+        'shots':measured['shots'], 'transitions':ordered,
+        'music_track':(track or {}).get('id'), 'music_name':(track or {}).get('name'),
+        'music_volume_pct':volume_pct, 'music_intensity':intensity,
+        'music_start_seconds':music_start, 'music_end_seconds':music_end,
+        'ducking':bool(options.get('ducking',True)), 'timing_source':alignment.get('source'),
+        'caption_source':alignment.get('caption_source'), 'match_ratio':alignment.get('match_ratio'),
+        'captions':caption_stats, 'speech_tempo':voice.get('speech_tempo'),
+        'voice':measured.get('tts',{}).get('voice') or voice.get('voice'),
+        'tts_model':measured.get('tts',{}).get('model') or cfg('models','tts'),
+        'multi_speaker':measured.get('tts',{}).get('multi_speaker',voice.get('multi_speaker',False)),
+        'language':language,
+    }
+    (work / 'shotlist.json').write_text(json.dumps({'shots':measured['shots'],'transitions':ordered}), encoding='utf-8')
+    from . import remote_render
+    if remote_render.enabled():
+        from dataclasses import asdict
+        from .music_edit import fetch_media
+        files = {f'images/{p.name}':p for p in images}
+        files.update({'narration.wav':narration, 'captions.ass':captions})
+        for font in (work / 'fonts').glob('*'):
+            if font.is_file():
+                files[f'fonts/{font.name}'] = font
+        if track:
+            files['music.audio'] = fetch_media(track['path'], work / 'render-music.audio')
+        remote_render.submit(video_id,
+            {'operation':'assemble', 'images':[f'images/{p.name}' for p in images],
+             'timeline':asdict(timeline), 'transitions':ordered,
+             'music': {**track, 'path':'music.audio'} if track else None,
+             'music_start':music_start, 'music_end':music_end, 'intensity':intensity,
+             'ducking':bool(options.get('ducking',True))}, files,
+            {'spec':render_spec, 'duration':round(timeline.duration,2), 'image_count':len(images)})
 
     # Crop the selected region first; looping must never include audio outside it.
     from . import storage as _storage
@@ -776,14 +825,13 @@ def build_language_variant(parent_id: str, language: str) -> dict:
         measured = stage_narrate(variant_id, channel, beats, voice_plan, language)
 
         plan = choose_edit(variant_id, channel, measured, options)
-        build_video(variant_id, channel, plan, options, beats)
-
         with session_scope() as session:
             variant = session.get(Video, variant_id)
             variant.title = translation.title or parent_copy["title"]
             variant.description = translation.description or parent_copy["description"]
             variant.instagram_caption = translation.instagram_caption or parent_copy["instagram_caption"]
             variant.hashtags = parent_copy["hashtags"]
+        build_video(variant_id, channel, plan, options, beats)
         return settle(variant_id, channel, None, write_history=False)
 
 
@@ -819,8 +867,8 @@ def produce(video_id: str) -> dict:
         stage_images(video_id, channel, visuals)
 
         plan = choose_edit(video_id, channel, measured, options)
-        build_video(video_id, channel, plan, options, beats)
         stage_copy(video_id, channel, premise, script, options)
+        build_video(video_id, channel, plan, options, beats)
         result = settle(video_id, channel, premise)
 
     variants = []
@@ -839,8 +887,11 @@ def produce(video_id: str) -> dict:
 
 
 def run(video_id: str) -> dict:
+    from .remote_render import RenderDeferred
     try:
         return produce(video_id)
+    except RenderDeferred:
+        raise
     except Exception:
         try:
             content_ledger.finalize_for_video(video_id, False)

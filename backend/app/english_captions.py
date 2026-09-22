@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field, model_validator
 from .llm import generate_model
 
 
-def english_captions(words: list[dict], language: str, work) -> list[dict]:
+def english_captions(words: list[dict], language: str, work, allow_generate=True) -> list[dict]:
     if language.lower().replace('_', '-').split('-')[0] == 'en':
         return words
     if not words:
@@ -32,6 +32,9 @@ def english_captions(words: list[dict], language: str, work) -> list[dict]:
         saved = json.loads(cache.read_text(encoding='utf-8'))
         if saved.get('signature') == signature:
             return saved['captions']
+
+    if not allow_generate:
+        raise ValueError('Saved English caption translation is missing; reuse does not call a text model')
 
     class Phrase(BaseModel):
         id: int

@@ -46,10 +46,19 @@ def binary(name: str) -> str:
 
 def run(args: list[str], cwd: Path | None = None, timeout: int = 1800) -> str:
     # Bound decoder/filter/encoder threads for Render's small memory budget.
-    if Path(args[0]).stem.lower() == "ffmpeg":
+    from .render_profile import policy, guarded_run
+    fast = policy().fast
+    if fast and Path(args[0]).stem.lower() == 'ffmpeg':
+        threads = str(policy().threads)
+        args = list(args)
+        for i, arg in enumerate(args[:-1]):
+            if arg in ('-threads', '-filter_threads', '-filter_complex_threads'):
+                args[i + 1] = threads
+        args = [args[0], '-threads', threads, '-filter_threads', threads, *args[1:]]
+    elif Path(args[0]).stem.lower() == "ffmpeg":
         args = [args[0], "-threads", "1", "-filter_threads", "1", *args[1:]]
     try:
-        result = subprocess.run(  # noqa: S603
+        result = guarded_run(args, cwd, timeout) if fast else subprocess.run(  # noqa: S603
             args,
             cwd=str(cwd) if cwd else None,
             capture_output=True,
@@ -62,6 +71,9 @@ def run(args: list[str], cwd: Path | None = None, timeout: int = 1800) -> str:
     except subprocess.TimeoutExpired as error:
         raise RuntimeError(f"FFmpeg timed out after {timeout}s") from error
     if result.returncode:
+        if fast and (result.returncode in (-9,137) or 'Cannot allocate memory' in (result.stderr or '')):
+            from .render_profile import MemoryPressure
+            raise MemoryPressure('Fast media pass exhausted memory; using low_memory')
         raise RuntimeError("Media processing failed: " + (result.stderr or "")[-2500:])
     return result.stdout
 
@@ -257,6 +269,17 @@ def assemble(
     clips_dir.mkdir(parents=True, exist_ok=True)
 
     pulls_back = [i < len(transitions) and transitions[i].get('kind') == 'zoom_out' for i in range(len(images))]
+    from .render_profile import policy, using, MemoryPressure
+    if policy().fast:
+        try:
+            pieces = direct_segments(images, timeline, transitions, clips_dir)
+            return assemble_bounded(pieces, narration, captions, output, timeline, music,
+                                    music_intensity, ducking, music_start)
+        except MemoryPressure:
+            # No provider calls and no changed output settings: retry with the proven two-input path.
+            with using('low_memory'):
+                return assemble(images, narration, timeline, transitions, captions, output, clips_dir,
+                                music, music_intensity, ducking, music_start)
     clips = [ensure_clip(image, timeline.frames[index], clips_dir, pulls_back[index]) for index, image in enumerate(images)]
 
     # Re-verify immediately before the command is built: this window is where synced folders and
@@ -268,7 +291,10 @@ def assemble(
     if missing:
         raise RuntimeError(f"Scene clips vanished before assembly: {missing[:4]}")
 
-    if cfg("runtime", "low_memory_render", default=True):
+    from .config import boot
+    # An explicit execution profile takes precedence over the legacy dashboard flag.
+    # Keep the old non-bounded branch available only to pre-profile local installations.
+    if cfg("runtime", "low_memory_render", default=True) or 'render_profile' in boot().model_fields_set:
         if any(timeline.blends):
             clips = transition_segments(clips, timeline, transitions, clips_dir)
         return assemble_bounded(clips, narration, captions, output, timeline, music,
@@ -358,6 +384,51 @@ def assemble(
     validate(partial, duration)
     partial.replace(output)
     return output
+
+
+def direct_segments(images, timeline, transitions, work):
+    """Bounded batches share prepared frames, avoiding full-scene intermediate encodes."""
+    from .settings_store import cfg
+    from .render_profile import policy
+    width, height, fps = int(cfg('video','width')), int(cfg('video','height')), timeline.fps
+    timing = cfr_filter(fps)
+    # Leave a Python/muxing reserve, and budget 256 MiB per prepared scene.
+    # On one CPU, the measured single-scene + boundary path beat larger batches.
+    # More RAM is permitted, not allocated for its own sake; multi-CPU workers can batch.
+    batch = min(1 if policy().cpus < 2 else 4,
+                max(1, (policy().ceiling - 256*1024**2) // (256*1024**2)))
+    pieces = []
+    for start in range(0,len(images),batch):
+        stop = min(len(images),start+batch)
+        last_input = stop + int(stop < len(images) and bool(timeline.blends[stop]))
+        args = [binary('ffmpeg'), '-y', '-v', 'error', '-filter_complex_threads', '1']
+        filters, outputs = [], []
+        for i in range(start,last_input):
+            args += ['-i',str(images[i].resolve())]
+            incoming = timeline.blends[i]
+            outgoing = timeline.blends[i+1] if i+1 < len(images) else 0
+            end = timeline.frames[i]-outgoing
+            parts = (['head'] if i>start and incoming else []) + (['body'] if i<stop else []) + (['tail'] if i<stop and outgoing else [])
+            zoom = zoom_filter(timeline.frames[i],width,height,fps,transitions[i].get('kind')=='zoom_out')
+            labels = ''.join(f'[{part}in{i}]' for part in parts)
+            filters.append(f'[{i-start}:v]{zoom}' + (f',split={len(parts)}' if len(parts)>1 else '') + labels)
+            if 'head' in parts:
+                filters.append(f'[headin{i}]trim=end_frame={incoming},{timing}[head{i}]')
+            if 'body' in parts:
+                # zoompan supplies CFR. A redundant fps filter here loses the last EOF tick.
+                filters.append(f'[bodyin{i}]trim=start_frame={incoming}:end_frame={end},setpts=PTS-STARTPTS[body{i}]')
+                outputs.append((f'body{i}',end-incoming,work/f'auto-body-{i:03d}.mp4'))
+            if 'tail' in parts:
+                filters.append(f'[tailin{i}]trim=start_frame={end}:end_frame={timeline.frames[i]},{timing}[tail{i}]')
+                filters.append(f'[tail{i}][head{i+1}]xfade=transition={XFADE[transitions[i+1]["kind"]]}:duration={outgoing/fps:.9f}:offset=0,format=yuv420p[boundary{i}]')
+                outputs.append((f'boundary{i}',outgoing,work/f'auto-boundary-{i:03d}.mp4'))
+        args += ['-filter_complex', ';'.join(filters)]
+        for label, frames, path in outputs:
+            args += ['-map', f'[{label}]', '-an', '-c:v', 'libx264', '-threads', '1', '-preset', 'veryfast',
+                     '-crf', '21', '-pix_fmt', 'yuv420p', '-r', str(fps), '-frames:v', str(frames), str(path.resolve())]
+            pieces.append(path)
+        run(args)
+    return pieces
 
 
 def transition_segments(clips, timeline, transitions, work):

@@ -43,10 +43,17 @@ class ProductionTests(unittest.TestCase):
             root = Path(tmp)
             (root/'images').mkdir()
             (root/'images'/'s001.png').touch()
+            import json
+            (root/'narration.wav').write_bytes(b'fixture')
+            (root/'timeline.json').write_text(json.dumps({'duration':50,'spans':[[0,50]],
+                'alignment':{'captions':[{'word':'Hello','start':1,'end':2}]}}))
             with patch.object(regenerate,'_load',return_value=({},None,None,{}, {},'en')), patch.object(regenerate,'_beats',return_value=[{'shot_id':'s001'}]), patch.object(regenerate.pipeline,'work_dir',return_value=root), patch.object(regenerate,'session_scope',return_value=db), patch.object(regenerate.pipeline,'stage_narrate',return_value={'duration':54.5}) as narrate, patch.object(regenerate.pipeline,'stage_images') as images, patch.object(regenerate,'_invalidate_clips'), patch.object(regenerate,'_rebuild',return_value={}):
-                result = regenerate.change_speed('id',{'playback_rate':0.94})
+                with patch('app.media.run'), patch('app.media.binary',return_value='ffmpeg'), patch('app.media.seconds',return_value=54.5):
+                    result = regenerate.change_speed('id',{'playback_rate':0.94})
                 self.assertEqual(result['images_added'],0)
-                self.assertEqual(narrate.call_args.kwargs['playback_rate'],0.94)
+                narrate.assert_not_called()
+                saved = json.loads((root/'timeline.json').read_text())
+                self.assertAlmostEqual(saved['alignment']['captions'][0]['start'],1.09)
                 images.assert_not_called()
 
     def test_free_tts_fallback_does_not_use_paid_key(self):

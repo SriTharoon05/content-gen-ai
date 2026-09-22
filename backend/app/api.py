@@ -77,6 +77,8 @@ def lifespan_factory():
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
+        from .remote_render import validate_configuration
+        validate_configuration()
         if boot().app_env == "production" and (not boot().admin_token or not _storage.enabled()):
             raise RuntimeError("Production requires ADMIN_TOKEN, SUPABASE_URL and SUPABASE_KEY")
         init_db()
@@ -100,6 +102,8 @@ def lifespan_factory():
 
 
 app = FastAPI(title="Story Shorts", version="3.0.0", lifespan=lifespan_factory())
+from .render_api import router as render_router
+app.include_router(render_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=boot().origins or ["*"],
@@ -746,7 +750,7 @@ def regenerate_endpoint(video_id: str, what: str, payload: dict | None = None) -
         video = session.get(Video, video_id, with_for_update=True)
         if not video:
             raise HTTPException(404, "No such video")
-        if session.scalar(select(Job.id).where(Job.video_id == video_id, Job.status.in_(['queued', 'running']))):
+        if session.scalar(select(Job.id).where(Job.video_id == video_id, Job.status.in_(['queued', 'running', 'waiting_render']))):
             raise HTTPException(409, "This video already has a queued or running job")
         if what == 'speed':
             try:
@@ -792,7 +796,7 @@ def regenerate_endpoint(video_id: str, what: str, payload: dict | None = None) -
             from .models import Publication
             if not row or row.state not in ('READY', 'AWAITING_APPROVAL') or session.scalar(select(Publication.id).where(Publication.video_id == video_id)):
                 raise HTTPException(409, 'Video changed or entered publishing; refresh before editing')
-        if session.scalar(select(Job.id).where(Job.video_id == video_id, Job.status.in_(['queued', 'running']))):
+        if session.scalar(select(Job.id).where(Job.video_id == video_id, Job.status.in_(['queued', 'running', 'waiting_render']))):
             raise HTTPException(409, "This video already has a queued or running job")
         job = Job(video_id=video_id, stage=stage, payload_json=payload, max_attempts=1)
         session.add(job)
@@ -823,7 +827,7 @@ def preview_reviewed(video_id: str, payload: dict):
         v = s.get(Video, video_id, with_for_update=True)
         if not v or v.state not in ('READY','AWAITING_APPROVAL') or payload.get('output_revision') != v.output_path:
             raise HTTPException(409, 'The preview changed; play the latest completed version')
-        if s.scalar(select(Job.id).where(Job.video_id == video_id, Job.status.in_(['queued','running']))):
+        if s.scalar(select(Job.id).where(Job.video_id == video_id, Job.status.in_(['queued','running','waiting_render']))):
             raise HTTPException(409, 'Wait for the current edit to finish')
         v.options_json = {**(v.options_json or {}),'reviewed_output':v.output_path}
     return {'reviewed':True}
@@ -1046,6 +1050,7 @@ def jobs(status: str | None = None, limit: int = 60) -> dict:
         return {"jobs": [
             {"id": j.id, "video_id": j.video_id, "stage": j.stage, "status": j.status,
              "attempts": j.attempts, "max_attempts": j.max_attempts, "error": (j.error or "")[:800],
+             "render_task_id": (j.payload_json or {}).get('render_task_id'),
              "created_at": j.created_at.isoformat() if j.created_at else None}
             for j in rows
         ]}
@@ -1078,10 +1083,13 @@ def retry_job(job_id: str) -> dict:
         job = session.get(Job, job_id)
         if not job:
             raise HTTPException(404, "No such job")
-        if job.status in ("queued", "running"):
+        if job.status in ("queued", "running", "waiting_render"):
             raise HTTPException(409, "Job is already active")
         if job.stage == "publish":
             raise HTTPException(409, "Reconcile publication with the remote account before retrying")
+        if job.payload_json.get('render_task_id'):
+            from .remote_render import retry_task
+            return retry_task(session, job)
         job.status = "queued"
         job.attempts = 0
         job.error = ""

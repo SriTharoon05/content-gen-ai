@@ -1,0 +1,50 @@
+version: 2.1
+
+parameters:
+  render_task_id:
+    type: string
+    default: ""
+
+jobs:
+  render-media:
+    docker:
+      - image: python:3.12-slim
+    resource_class: medium
+    environment:
+      PYTHONUNBUFFERED: "1"
+      RENDER_PROFILE: auto
+      RENDER_EXECUTION_BACKEND: local
+      RENDER_TASK_ID: << pipeline.parameters.render_task_id >>
+    steps:
+      - run:
+          name: Install checkout and canonical FFmpeg/libass runtime
+          command: apt-get update && apt-get install -y --no-install-recommends git openssh-client ffmpeg ca-certificates curl
+      - checkout
+      - restore_cache:
+          keys:
+            - media-py312-v1-{{ checksum "backend/requirements.txt" }}
+      - run:
+          name: Install Python dependencies and canonical caption font
+          command: |
+            python -m venv /tmp/media-venv
+            /tmp/media-venv/bin/pip install -r backend/requirements.txt
+            /tmp/media-venv/bin/python backend/scripts/setup_caption_assets.py
+      - save_cache:
+          key: media-py312-v1-{{ checksum "backend/requirements.txt" }}
+          paths:
+            - ~/.cache/pip
+      - run:
+          name: Claim and render one checkpointed task
+          working_directory: ~/project/backend
+          no_output_timeout: 60m
+          command: /tmp/media-venv/bin/python scripts/circleci_render.py
+
+workflows:
+  render-request:
+    when:
+      and:
+        - equal: [api, << pipeline.trigger.type >>]
+        - not:
+            equal: ["", << pipeline.parameters.render_task_id >>]
+    jobs:
+      - render-media

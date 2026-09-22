@@ -127,19 +127,57 @@ def change_speed(video_id: str, payload: dict) -> dict:
         raise pipeline.PipelineError("A saved image is missing; speed changes never purchase replacements")
     with session_scope() as session:
         voice = dict(session.get(Video, video_id).voice_json or {})
-    measured = pipeline.stage_narrate(video_id, channel, beats, voice, language, playback_rate=rate)
+    # Reuse measured timestamps; an audio speed edit must not call TTS/ASR/text providers.
+    from . import media
+    import copy
+    import hashlib
+    import shutil
+    base = work / 'narration-speed-base.wav'
+    timing_base = work / 'speed-timeline-base.json'
+    if not base.exists() or not timing_base.exists():
+        shutil.copy2(work / 'narration.wav', base)
+        shutil.copy2(work / 'timeline.json', timing_base)
+        if (work / 'english-captions.json').exists():
+            shutil.copy2(work / 'english-captions.json', work / 'speed-english-base.json')
+        else:
+            (work / 'speed-english-base.json').unlink(missing_ok=True)
+    measured = json.loads(timing_base.read_text(encoding='utf-8'))
+    if not measured.get('alignment', {}).get('captions'):
+        raise pipeline.PipelineError('Saved alignment is required for a provider-free speed change')
+    expected = float(measured['duration']) / rate
+    media.run([media.binary('ffmpeg'),'-y','-v','error','-i',str(base),'-af',f'atempo={rate},apad,atrim=duration={expected:.9f}',
+               '-c:a','pcm_s16le',str(work / 'narration.wav')])
+    total = media.seconds(work / 'narration.wav')
+    ratio = total / float(measured['duration'])
+    def scaled(value):
+        if isinstance(value, list):
+            return [scaled(item) for item in value]
+        if isinstance(value, dict):
+            return {key: (float(item)*ratio if key in ('start','end','duration') and isinstance(item,(int,float)) else scaled(item))
+                    for key,item in value.items()}
+        return value
+    measured = scaled(copy.deepcopy(measured))
+    measured['spans'] = [[a*ratio,b*ratio] for a,b in measured['spans']]
+    measured['duration'] = total
+    measured['tts'] = {**measured.get('tts',{}),'transport':'retimed_existing_audio','playback_rate':rate}
+    (work / 'timeline.json').write_text(json.dumps(measured),encoding='utf-8')
+    translated = work / 'speed-english-base.json'
+    if translated.exists():
+        saved = json.loads(translated.read_text(encoding='utf-8'))
+        signature = hashlib.sha256(json.dumps([language, measured['alignment']['captions'], 'english-phrases-v1'],ensure_ascii=False).encode()).hexdigest()
+        (work / 'english-captions.json').write_text(json.dumps({'signature':signature,'captions':scaled(saved['captions'])}),encoding='utf-8')
     with session_scope() as session:
         row = session.get(Video, video_id)
         row.options_json = {**(row.options_json or {}), 'playback_rate': rate}
     _invalidate_clips(video_id)
-    result = _rebuild(video_id, channel, spec, options, script)
+    result = _rebuild(video_id, channel, spec, {**options, '_reuse_assets':True}, script)
     return {**result, 'playback_rate': rate, 'images_added': 0, 'narration_seconds': measured['duration']}
 
 
 def rerender(video_id: str, payload: dict | None = None) -> dict:
     """Re-run captions, timeline and FFmpeg. Nothing is regenerated, nothing is charged."""
     channel, _premise, script, spec, run_options, _language = _load(video_id)
-    return _rebuild(video_id, channel, spec, run_options, script, payload or {})
+    return _rebuild(video_id, channel, spec, {**run_options, '_reuse_assets':True}, script, payload or {})
 
 
 def regenerate_edit(video_id: str, payload: dict | None = None) -> dict:
@@ -151,13 +189,8 @@ def regenerate_edit(video_id: str, payload: dict | None = None) -> dict:
 
     plan = None
     if payload.get("ask_agent"):
-        options = pipeline.resolve_options(channel, {**run_options, **payload})
-        plan = pipeline.choose_edit(video_id, channel, measured, options)
-        if payload.get("music_track") is not None:
-            plan.music_track = payload["music_track"] or None
-        if payload.get("music_volume_pct") is not None:
-            plan.music_volume_pct = int(payload["music_volume_pct"])
-    return _rebuild(video_id, channel, spec, run_options, script, payload, plan)
+        raise pipeline.PipelineError('Reuse edits are provider-free. Choose transitions/music manually.')
+    return _rebuild(video_id, channel, spec, {**run_options, '_reuse_assets':True}, script, payload, plan)
 
 
 def regenerate_copy(video_id: str, payload: dict | None = None) -> dict:
@@ -331,8 +364,8 @@ def regenerate_script(video_id: str, payload: dict | None = None) -> dict:
         pipeline.stage_images(video_id, channel, visuals)
 
         plan = pipeline.choose_edit(video_id, channel, measured, options)
-        pipeline.build_video(video_id, channel, plan, options, beats)
         pipeline.stage_copy(video_id, channel, premise, script, options)
+        pipeline.build_video(video_id, channel, plan, options, beats)
     return pipeline.settle(video_id, channel, None, write_history=False)
 
 
