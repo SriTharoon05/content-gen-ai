@@ -1,6 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {parseJSON,speechChunks,pcmWav,textModel,merge} from '../src/providers';
+import {parseJSON,speechChunks,pcmWav,textModel,merge,image as generateImage} from '../src/providers';
+import type {Env} from '../src/types';
 test('JSON rejects trailing content but accepts a single fenced object',()=>{
   assert.deepEqual(parseJSON('```json\n{"a":1}\n```'),{a:1});
   assert.throws(()=>parseJSON('{"a":1} trailing'));
@@ -26,5 +27,26 @@ test('429 on one key immediately advances independently to next and falls back t
   try {
     assert.deepEqual(await textModel({settings:{keys:{gemini_free:['g1','g2'],groq:['groq1','groq2'],gemini_audio_paid:'never-use'}}},'test',{}),{ok:true});
     assert.deepEqual(seen,['g1','g2','Bearer groq1','Bearer groq2']);
+  } finally{globalThis.fetch=original;}
+});
+
+test('settled image retry returns checkpoint without purchasing again',async()=>{
+  const original=globalThis.fetch;let requests=0;
+  const asset={url:'https://res.cloudinary.com/test/image/upload/a.png',sha256:'a'.repeat(64)};
+  globalThis.fetch=async()=>{requests++;return Response.json({status:'settled',detail_json:asset});};
+  try {
+    const c={settings:{models:{image_model:'fixture',image_catalog:[{id:'fixture',credits:.002}]}}};
+    assert.deepEqual(await generateImage({SUPABASE_URL:'https://test.supabase.co',SUPABASE_KEY:'fake'} as Env,'a'.repeat(32),'image-s001',c,'test'),asset);
+    assert.equal(requests,1);
+  } finally{globalThis.fetch=original;}
+});
+
+test('uncertain image reservation refuses automatic duplicate billing',async()=>{
+  const original=globalThis.fetch;let requests=0;
+  globalThis.fetch=async()=>{requests++;return Response.json({status:'reserved'});};
+  try {
+    const c={settings:{models:{image_model:'fixture',image_catalog:[{id:'fixture',credits:.002}]}}};
+    await assert.rejects(()=>generateImage({SUPABASE_URL:'https://test.supabase.co',SUPABASE_KEY:'fake'} as Env,'a'.repeat(32),'image-s001',c,'test'),/uncertain/);
+    assert.equal(requests,1);
   } finally{globalThis.fetch=original;}
 });

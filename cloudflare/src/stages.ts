@@ -56,7 +56,7 @@ export class GenerationStageWorkflow extends WorkflowEntrypoint<Env,StageParams>
       if(op==='media-submit'){
         const tid=(await digest(id+':'+data.name)).slice(0,32);
         await createTask(this.env,tid,id,validateManifest(data.manifest,this.env));
-        try{await this.env.MEDIA_WORKFLOW.create({id:tid,params:{taskId:tid}});}
+        try{await this.env.MEDIA_WORKFLOW.create({id:tid,params:{taskId:tid,notifyGeneration:p.parentId}});}
         catch(e){try{await(await this.env.MEDIA_WORKFLOW.get(tid)).status();}catch{throw e;}}
         value=tid;
       } else if(op==='audio-ready'){

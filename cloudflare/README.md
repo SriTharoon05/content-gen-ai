@@ -33,6 +33,12 @@ Canonical nonsecret defaults, Pydantic JSON schemas and editorial instructions a
 exported with `python cloudflare/scripts/export_contract.py` into `src/contract.json`.
 Refresh this build artifact when canonical schemas/defaults/skills change.
 Worker secrets stay inside individual steps and are never saved in Workflow results.
+Free-plan live testing exposed a 50-subrequest budget. Provider steps now execute in
+separate `GenerationStageWorkflow` instances, notify the coordinator with durable
+events, and the coordinator chains a continuation after eight new checkpoints.
+It does not poll each child repeatedly. Media completion also uses an event, with
+only ten-minute database reconciliation if a callback is lost. No paid CPU/subrequest
+override is configured. Actual daily step usage still needs measuring before scaling.
 The isolated pilot currently checks out `codex/cloudflare-fresh-generation`; after
 merging, change `CIRCLECI_BRANCH` to `main` and redeploy. No VCS trigger is enabled.
 
@@ -52,9 +58,9 @@ Supported media operations:
 | Claims, upload signatures, status, database transitions | Cloudflare Worker |
 | Trigger retries, completion wait, deadline recovery | Cloudflare Workflow |
 
-No FFmpeg, NumPy audio processing, image decoding or media hashing occurs in Workers.
-Worker hashes only small credentials/upload-signature strings. Asset SHA-256 is checked
-by CircleCI. Never send binary assets as Workflow payloads or step results.
+No FFmpeg, NumPy audio processing or image decoding occurs in Workers. The fresh
+generation adapter checksums bounded uploads using WebCrypto; CircleCI verifies every
+downloaded asset SHA-256 again. Never send binary assets as Workflow payloads or step results.
 
 The current `medium` runner (2 CPUs / 4 GB) and dynamic `auto` resource profile are
 preserved. The existing `low_memory` code is not changed or duplicated.
@@ -106,6 +112,9 @@ npx wrangler login
 Worker name: `story-shorts-cloudflare-pilot`.
 Workflow binding: `MEDIA_WORKFLOW`; class `MediaWorkflow`;
 Workflow name: `story-shorts-media-pilot` (declared in `wrangler.jsonc`).
+Fresh generation also binds `GENERATION_WORKFLOW` (`GenerationWorkflow`,
+`story-shorts-generation-pilot`) and `GENERATION_STAGE` (`GenerationStageWorkflow`,
+`story-shorts-generation-stage`). All are deployed together by Wrangler.
 No D1/KV/R2/Queues/Hyperdrive binding is required by this pilot.
 Database operations use Supabase's existing HTTPS Data API. The pilot-specific
 `cf_media_task` RPC keeps claims and multi-table updates atomic inside PostgreSQL.
@@ -213,9 +222,11 @@ ASR must consume this prepared audio, not raw TTS; otherwise captions will drift
 ## Still on Render / NOT implemented in this pilot
 
 - All existing frontend API routes, settings/channel CRUD and dashboard integration.
-- Gemini/Groq/image generation, key rotation/cooldowns and cost ledger writes.
-- Story selection, pgvector uniqueness reservation and generation checkpoint recovery.
-- ASR, caption generation/translation and timeline creation after prepared audio.
+- Full production parity beyond the new English single-narrator test route: conversation
+  and multilingual generation, paid-provider options, complete cost/token accounting,
+  channel memory/editorial quality regression coverage and dashboard generation controls.
+- English ASR/canonical captions work in the fresh pilot; translated captions and
+  existing edit/re-render dashboard orchestration are not migrated.
 - Google/Meta OAuth, review approval, YouTube/Instagram publishing and analytics.
 - Scheduling and full end-to-end generation/re-render/speed-edit orchestration.
 

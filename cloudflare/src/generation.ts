@@ -1,7 +1,6 @@
 import {WorkflowEntrypoint,type WorkflowEvent,type WorkflowStep} from 'cloudflare:workers';
-import {generation,createTask,loadTask} from './db';
-import {config,textModel,embedding,geminiSpeech,groqSpeech,speechChunks,transcribe,image,upload} from './providers';
-import {digest,validateManifest} from './storage';
+import {generation,loadTask} from './db';
+import {speechChunks} from './providers';
 import type {Env,Manifest} from './types';
 import contract from './contract.json';
 import {runStage} from './stages';
@@ -33,13 +32,6 @@ export function validateScript(s:any) {
   const count=s.beats.reduce((n:number,b:any)=>n+b.narration.trim().split(/\s+/).length,0);
   if(count<130||count>205||s.beats[0].narration.split(/\s+/).length>16)throw new Error('Script pacing bounds');
 }
-function context(c:any) {
-  const channel=c.channel;const skills=contract.skills as Record<string,string>;
-  return `CHANNEL: ${channel.name}. NICHE: ${channel.niche}\nOWNER INSTRUCTIONS: ${channel.strategy_json?.instructions??skills['brand/'+channel.slug+'.md']??''}
-STRATEGY: ${JSON.stringify(channel.strategy_json)}\nOPTIONS: ${JSON.stringify(channel.overrides_json)}
-Original model-generated content. External fact checking is disabled. Do not invent studies, current news, statistics or real-person quotes. Clearly frame fiction/speculation.
-PRIOR CONCEPTS TO AVOID: ${JSON.stringify(c.prior)}`;
-}
 const skill=(name:string)=>(contract.skills as Record<string,string>)[name+'.md']||'';
 
 class Continued extends Error {}
@@ -68,18 +60,12 @@ export class GenerationWorkflow extends WorkflowEntrypoint<Env,{videoId:string;s
     };
     const media=async(name:string,manifest:Manifest):Promise<any>=>{
       const tid=await checkpoint(name+'-task','media-submit',{name,manifest});
-      for(let n=0;n<120;n++){
-        const t=await step.do(name+'-poll-'+n,async()=>{
-          const s=await(await this.env.MEDIA_WORKFLOW.get(tid)).status();return {status:s.status,output:s.output??null};
-        });
-        if(t.status==='complete'){
-          // Older media instances predate the result-bearing completion contract.
-          const row:any=await step.do(name+'-result',()=>loadTask(this.env,tid));
-          if(row.status!=='succeeded')throw new Error(name+' media task failed');
-          return {...row.result_json,duration:row.result_json.duration??row.result_json.metrics?.duration};
-        }
-        if(['errored','terminated'].includes(t.status))throw new Error(name+' media task failed; inspect CircleCI');
-        await step.sleep(name+'-wait-'+n,'2 minutes');
+      for(let n=0;n<25;n++){
+        const row:any=await step.do(name+'-inspect-'+n,()=>loadTask(this.env,tid));
+        if(row.status==='succeeded')return {...row.result_json,duration:row.result_json.duration??row.result_json.metrics?.duration};
+        if(row.status==='failed')throw new Error(name+' media task failed; inspect CircleCI');
+        try{await step.waitForEvent(name+'-wait-'+n,{type:'render-'+tid,timeout:'10 minutes'});}
+        catch{/* A missing callback recovers via one DB lookup per ten minutes. */}
       }
       throw new Error(name+' media deadline exceeded');
     };
@@ -89,10 +75,10 @@ export class GenerationWorkflow extends WorkflowEntrypoint<Env,{videoId:string;s
       const premise=await model('premise','Premise',()=>`Develop this reserved concept without changing its entity/angle: ${JSON.stringify(concept)}. A distinct 45–75 second story with a hook and a meaningful payoff.`);
       let script=await model('script','Script',()=>`${skill('hooks_and_retention')}\n${skill('audio_direction')}\nPREMISE:${JSON.stringify(premise)}
 Write 20–25 sequential visual beats, up to 30 only if context needs them. shot_id MUST be exactly s001, s002, s003 ... in order, never numeric IDs or other prefixes. 130–180 spoken words, absolute maximum 205. Natural fluent complete thoughts, no robotic fragments. An expressive human voice, contractions, varied rhythm. The first beat must be at most 16 words and give a specific reason to watch. Facts/science use a curiosity question or concrete puzzle, not generic hype. Fiction starts in an intriguing scene, not forced 'do you know'. Every speaker field MUST be the empty string, not Narrator or a voice name.`,validateScript);
-      let qa=await model('qa','QAFinding',()=>`${skill('qa_rules')}\nReview this script for meaningful payoff, natural spoken flow, channel fit, safe factual framing and a specific engaging hook. SCRIPT:${JSON.stringify(script)}`);
+      let qa=await model('qa','QAFinding',()=>`${skill('qa_rules')}\nRESERVED CONCEPT:${JSON.stringify(concept)}\nPREMISE:${JSON.stringify(premise)}\nReview this script for meaningful payoff, fluent connected sentences (not isolated robotic bullet points), channel fit, safe factual framing and a specific engaging hook. Fail if it changes the reserved entity/angle or invents historical events, evidence, dates, scientific confirmation or institutions without explicitly framing them as fiction. The examples in channel instructions are not evidence. SCRIPT:${JSON.stringify(script)}`);
       for(let r=0;!qa.passed&&r<2;r++){
         script=await model('revision-'+r,'Script',()=>`${skill('hooks_and_retention')}\nRevise ${JSON.stringify(script)} using ${JSON.stringify(qa.findings)}. Keep 20–30 beats, 130–205 words, sequential IDs, hook <=16 words.`,validateScript);
-        qa=await model('review-'+r,'QAFinding',()=>`${skill('qa_rules')}\nReview revised script: ${JSON.stringify(script)}`);
+        qa=await model('review-'+r,'QAFinding',()=>`${skill('qa_rules')}\nRESERVED CONCEPT:${JSON.stringify(concept)}\nPREMISE:${JSON.stringify(premise)}\nFail if the revised script changes the reserved entity/angle, uses robotic fragments, or presents invented evidence/history/scientific confirmations as fact. Review revised script: ${JSON.stringify(script)}`);
       }
       if(!qa.passed)throw new Error('Editorial QA failed after two revisions');
       await step.do('save-approved-script',async()=>{await generation(this.env,'save',id,{key:'script',value:script});await generation(this.env,'save',id,{key:'qa',value:qa});});
@@ -132,7 +118,9 @@ Write 20–25 sequential visual beats, up to 30 only if context needs them. shot
       for(const shot of visuals.shots){
         // Serial requests + >=2 seconds also fit 60 RPM; no burst per provider key.
         await step.sleep('image-rate-'+shot.shot_id,'2 seconds');
-        const a=await checkpoint('image-'+shot.shot_id,'image',{prompt:shot.image_prompt+'\n'+visuals.style_block},0);
+        // Retries read the DB checkpoint/settled ledger before making any new purchase.
+        // An uncertain reservation still fails closed; a post-save platform failure can recover.
+        const a=await checkpoint('image-'+shot.shot_id,'image',{prompt:shot.image_prompt+'\n'+visuals.style_block},2);
         const name='images/'+shot.shot_id+'.png';files[name]=a;images.push(name);
       }
       await model('copy','PublishCopy',()=>`${skill('image_and_publishing')}\nWrite accurate engaging YouTube title/description and separate Instagram caption with relevant hashtags, never promise virality. Script:${JSON.stringify(script)}`);

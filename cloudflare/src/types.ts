@@ -13,7 +13,7 @@ export interface Env {
   CIRCLECI_BRANCH: string;
   CORS_ORIGINS: string;
   ENABLE_MEDIA_PILOT: string;
-  MEDIA_WORKFLOW: Workflow<{taskId: string}>;
+  MEDIA_WORKFLOW: Workflow<{taskId: string;notifyGeneration?:string}>;
   GENERATION_WORKFLOW: Workflow<{videoId: string;segment?:number;runKey?:string}>;
   GENERATION_STAGE: Workflow<import('./stages').StageParams>;
 }
