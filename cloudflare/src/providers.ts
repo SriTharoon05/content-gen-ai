@@ -16,8 +16,8 @@ export function parseJSON(text:string) {
   // Parse exactly one JSON object; do not truncate trailing untrusted output.
   return JSON.parse(clean);
 }
-async function request(url:string,key:string,body:any,google=false):Promise<Response> {
-  return fetch(url,{method:'POST',headers:{'Content-Type':'application/json',...(google?{'x-goog-api-key':key}:{Authorization:'Bearer '+key})},body:JSON.stringify(body),signal:AbortSignal.timeout(180000)});
+async function request(url:string,key:string,body:any,google=false,timeout=90000):Promise<Response> {
+  return fetch(url,{method:'POST',headers:{'Content-Type':'application/json',...(google?{'x-goog-api-key':key}:{Authorization:'Bearer '+key})},body:JSON.stringify(body),signal:AbortSignal.timeout(timeout)});
 }
 export async function textModel(c:any,prompt:string,schema:any):Promise<any> {
   const keys=c.settings.keys||{};
@@ -26,7 +26,7 @@ export async function textModel(c:any,prompt:string,schema:any):Promise<any> {
   for(const key of keys.gemini_free||[]) {
     try {
       const r=await request('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent',key,
-        {contents:[{parts:[{text:instruction}]}],generationConfig:{responseMimeType:'application/json',maxOutputTokens:12000}},true);
+        {contents:[{parts:[{text:instruction}]}],generationConfig:{responseMimeType:'application/json',maxOutputTokens:12000}},true,60000);
       if(!r.ok){await r.body?.cancel();continue;}
       const b=await r.json() as any;
       return parseJSON(b.candidates?.[0]?.content?.parts?.filter((p:any)=>p.text&&!p.thought).map((p:any)=>p.text).join('')||'');
@@ -34,7 +34,7 @@ export async function textModel(c:any,prompt:string,schema:any):Promise<any> {
   }
   for(const key of keys.groq||[]) {
     try {
-      const r=await request('https://api.groq.com/openai/v1/chat/completions',key,{model:'openai/gpt-oss-120b',messages:[{role:'user',content:instruction}],response_format:{type:'json_object'},max_completion_tokens:12000});
+      const r=await request('https://api.groq.com/openai/v1/chat/completions',key,{model:'openai/gpt-oss-120b',messages:[{role:'user',content:instruction}],response_format:{type:'json_object'},reasoning_effort:'low',max_completion_tokens:6000},false,60000);
       if(!r.ok){await r.body?.cancel();continue;}
       const b=await r.json() as any;return parseJSON(b.choices?.[0]?.message?.content||'');
     } catch { /* next key */ }
@@ -97,10 +97,12 @@ export function speechChunks(text:string) {
 }
 export async function groqSpeech(env:Env,c:any,text:string) {
   for(const key of c.settings.keys?.groq||[]) {
+    try {
     const r=await request('https://api.groq.com/openai/v1/audio/speech',key,
       {model:'canopylabs/orpheus-v1-english',voice:c.settings.voice.groq_voice||'troy',input:text,response_format:'wav'});
     if(!r.ok){await r.body?.cancel();continue;}
     return upload(env,new Uint8Array(await r.arrayBuffer()),'audio','wav','audio/wav');
+    } catch { /* Try the next independent account after a transport failure. */ }
   }
   throw new Error('All free Groq speech keys unavailable');
 }
@@ -108,12 +110,14 @@ export async function transcribe(c:any,url:string) {
   const audio=await fetch(url);if(!audio.ok)throw new Error('Prepared audio download failed');
   const blob=await audio.blob();
   for(const key of c.settings.keys?.groq||[]) {
+    try {
     const form=new FormData();form.append('file',blob,'narration.wav');form.append('model','whisper-large-v3-turbo');
     form.append('response_format','verbose_json');form.append('timestamp_granularities[]','word');form.append('language','en');form.append('temperature','0');
     const r=await fetch('https://api.groq.com/openai/v1/audio/transcriptions',{method:'POST',headers:{Authorization:'Bearer '+key},body:form,signal:AbortSignal.timeout(180000)});
     if(!r.ok){await r.body?.cancel();continue;}
     const b=await r.json() as any;
     if(Array.isArray(b.words)&&b.words.length>20)return b.words;
+    } catch { /* Next independent account. */ }
   }
   throw new Error('No valid measured Groq word timestamps; refusing guessed captions');
 }
