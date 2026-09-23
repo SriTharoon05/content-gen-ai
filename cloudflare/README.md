@@ -65,7 +65,7 @@ preserved. The existing `low_memory` code is not changed or duplicated.
   `public.cf_media_task` function is installed; no existing table/RLS/schema layout changes.
 - Existing PostgreSQL + pgvector tables remain intact. No uniqueness logic is replaced.
 - Pilot `jobs.status` values are `cf_waiting`, `cf_done`, `cf_failed`; Render does not claim them.
-- Pilot render tasks use `next_trigger_at = infinity`; Render's outbox does not dispatch them.
+- Pilot render tasks use `next_trigger_at = 2100-01-01`; Render's outbox does not dispatch them and Python can decode their timestamps.
 - `continuation_json.backend = cloudflare-pilot` scopes all worker claims.
 - Pilot results live in `render_tasks.result_json`; **source Video records, assets,
   publishing and approval state are never changed**. Thus production can keep serving them.

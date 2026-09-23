@@ -25,7 +25,7 @@ BEGIN
     INSERT INTO public.jobs(id,video_id,stage,status,attempts,max_attempts,payload_json,error,created_at,updated_at)
     VALUES(p_task_id,v,'cloudflare_media','cf_waiting',0,1,jsonb_build_object('render_task_id',p_task_id,'backend','cloudflare-pilot'),'',now(),now());
     INSERT INTO public.render_tasks(id,job_id,video_id,status,manifest_json,continuation_json,result_json,owner_hash,pipeline_id,error,trigger_attempts,next_trigger_at,deadline,created_at,updated_at)
-    VALUES(p_task_id,p_task_id,v,'queued',m,'{"backend":"cloudflare-pilot"}','{}','','','',0,'infinity',now()+interval '4 hours',now(),now());
+    VALUES(p_task_id,p_task_id,v,'queued',m,'{"backend":"cloudflare-pilot"}','{}','','','',0,'2100-01-01 00:00:00+00',now()+interval '4 hours',now(),now());
     RETURN jsonb_build_object('id',p_task_id);
   END IF;
   IF p_action='load' THEN
@@ -71,4 +71,7 @@ END;
 $$;
 REVOKE ALL ON FUNCTION public.cf_media_task(text,text,jsonb) FROM PUBLIC,anon,authenticated;
 GRANT EXECUTE ON FUNCTION public.cf_media_task(text,text,jsonb) TO service_role;
+-- Keep pilot rows readable by the existing Python ORM (which cannot decode infinity).
+UPDATE public.render_tasks SET next_trigger_at='2100-01-01 00:00:00+00'
+WHERE continuation_json->>'backend'='cloudflare-pilot' AND next_trigger_at='infinity';
 NOTIFY pgrst,'reload schema';
