@@ -19,7 +19,7 @@ BEGIN
     THEN RETURN '{"error":"Fresh pilot currently supports English single-narrator channels only; existing Render routes unchanged","status":422}'::jsonb; END IF;
     INSERT INTO public.videos(id,channel_slug,parent_id,language,state,stage_detail,progress,topic,title,description,instagram_caption,hashtags,made_for_kids,premise_json,script_json,visual_json,spec_json,qa_json,options_json,narration_path,output_path,duration_seconds,narration_seconds,image_count,reused_count,credits_spent,text_tokens,voice_json,approved,error,created_at,updated_at)
     VALUES(p_task_id,c.slug,'','en','CF_GENERATING','Fresh Cloudflare review-only test',0,'','','','','[]',false,'{}','{}','{}','{}','{}',
-      jsonb_build_object('execution_backend','cloudflare-generation','review_before_upload',true,'auto_publish',false,'cf_steps','{}'::jsonb),
+      jsonb_build_object('execution_backend','cloudflare-generation','force_review',true,'publishing_mode','review','auto_publish',false,'cf_steps','{}'::jsonb),
       '','',0,0,0,0,0,0,'{}',false,'',now(),now());
     INSERT INTO public.jobs(id,video_id,stage,status,attempts,max_attempts,payload_json,error,created_at,updated_at)
     VALUES(p_task_id,p_task_id,'cf_generation','cf_generating',1,1,'{}','',now(),now());
@@ -72,7 +72,8 @@ BEGIN
     data:=v.options_json->'cf_steps';
     IF NOT EXISTS(SELECT 1 FROM public.render_tasks WHERE id=data->>'render-task' AND video_id=p_task_id AND status='succeeded')
     THEN RETURN '{"error":"Final render is not complete","status":409}'::jsonb; END IF;
-    UPDATE public.videos SET state='AWAITING_APPROVAL',progress=99,stage_detail='Cloudflare fresh generation; review required',approved=false,
+    UPDATE public.videos SET state='AWAITING_APPROVAL',progress=99,stage_detail='Cloudflare fresh generation; review required',approved=false,error='',
+      options_json=options_json::jsonb||'{"force_review":true,"publishing_mode":"review","auto_publish":false}'::jsonb,
       output_path=p_payload->>'url',duration_seconds=(p_payload->>'duration')::float,
       narration_path=data->'audio-ready'->>'url',narration_seconds=(data->'audio-ready'->>'duration')::float,
       script_json=data->'script',premise_json=data->'premise',visual_json=data->'visuals',qa_json=data->'qa',voice_json=data->'voice',
