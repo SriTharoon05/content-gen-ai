@@ -1,6 +1,7 @@
 import {WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep} from 'cloudflare:workers';
 import type {Env} from './types';
 import {triggered,triggerFailed,expire,loadTask} from './db';
+import {runStage} from './stages';
 
 export class MediaWorkflow extends WorkflowEntrypoint<Env, {taskId: string}> {
   async run(event: WorkflowEvent<{taskId: string}>, step: WorkflowStep) {
@@ -8,25 +9,11 @@ export class MediaWorkflow extends WorkflowEntrypoint<Env, {taskId: string}> {
     // Durable events wake immediately; ten-minute DB checks recover a lost callback.
     // No media bytes or credentials are stored in Workflow step results.
     for (let round = 0; round < 25; round++) {
-      const status = await step.do(`inspect-${round}`, async () => {
-        await expire(this.env,id);
-        const task = await loadTask(this.env,id);
-        return task.status as string;
-      });
+      const inspected=await runStage(this.env,step,`${id}-inspect-${round}`,{videoId:id,name:`inspect-${round}`,op:'media-inspect',data:{},retries:2});
+      const status=inspected.status;
       if (status === 'succeeded' || status === 'failed') return {taskId:id,status};
       if (status === 'queued') {
-        try {await step.do(`trigger-${round}`, {retries:{limit:2,delay:'30 seconds',backoff:'exponential'}}, async () => {
-          const r = await fetch(`https://circleci.com/api/v2/project/${this.env.CIRCLECI_PROJECT_SLUG}/pipeline/run`, {
-            method: 'POST', headers: {'Circle-Token':this.env.CIRCLECI_TOKEN,'Content-Type':'application/json'},
-            body: JSON.stringify({definition_id:this.env.CIRCLECI_PIPELINE_DEFINITION_ID,
-              config:{branch:this.env.CIRCLECI_BRANCH},checkout:{branch:this.env.CIRCLECI_BRANCH},parameters:{render_task_id:id}}),
-          });
-          if (!r.ok) throw new Error(`CircleCI trigger HTTP ${r.status}`);
-          const body = await r.json() as {id?:string};
-          if (!body.id) throw new Error('CircleCI returned no pipeline ID');
-          await triggered(this.env,id,body.id);
-          return body.id;
-        });} catch {
+        try {await runStage(this.env,step,`${id}-trigger-${round}`,{videoId:id,name:`trigger-${round}`,op:'media-trigger',data:{},retries:2});} catch {
           await step.do(`trigger-error-${round}`, async () => {
             await triggerFailed(this.env,id);
           });

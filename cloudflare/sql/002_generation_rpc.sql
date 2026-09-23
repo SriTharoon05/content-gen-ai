@@ -74,6 +74,15 @@ BEGIN
     data:=v.options_json->'cf_steps';
     IF NOT EXISTS(SELECT 1 FROM public.render_tasks WHERE id=data->>'render-task' AND video_id=p_task_id AND status='succeeded')
     THEN RETURN '{"error":"Final render is not complete","status":409}'::jsonb; END IF;
+    INSERT INTO public.assets(id,video_id,shot_id,kind,path,registry_id,reused,metadata_json,created_at)
+    SELECT md5(p_task_id||e.key),p_task_id,substring(e.key from 7),'image',e.value->>'url','',false,
+      jsonb_build_object('sha256',e.value->>'sha256','storage_provider','cloudinary'),now()
+    FROM jsonb_each(data) e WHERE e.key ~ '^image-s[0-9]{3}$'
+    ON CONFLICT(id) DO NOTHING;
+    INSERT INTO public.assets(id,video_id,shot_id,kind,path,registry_id,reused,metadata_json,created_at)
+    VALUES(md5(p_task_id||'narration'),p_task_id,'','narration',data->'audio-ready'->>'url','',false,
+      jsonb_build_object('sha256',data->'audio-ready'->>'sha256','storage_provider','cloudinary'),now())
+    ON CONFLICT(id) DO NOTHING;
     UPDATE public.videos SET state='AWAITING_APPROVAL',progress=99,stage_detail='Cloudflare fresh generation; review required',approved=false,error='',
       options_json=options_json::jsonb||'{"force_review":true,"publishing_mode":"review","auto_publish":false}'::jsonb,
       output_path=p_payload->>'url',duration_seconds=(p_payload->>'duration')::float,
@@ -81,7 +90,7 @@ BEGIN
       script_json=data->'script',premise_json=data->'premise',visual_json=data->'visuals',qa_json=data->'qa',voice_json=data->'voice',
       title=data->'copy'->>'youtube_title',description=data->'copy'->>'youtube_description',instagram_caption=data->'copy'->>'instagram_caption',hashtags=data->'copy'->'hashtags',
       image_count=jsonb_array_length(data->'visuals'->'shots'),reused_count=0,
-      credits_spent=coalesce((SELECT sum(credits) FROM public.provider_calls WHERE video_id=p_task_id AND status='settled'),0),updated_at=now() WHERE id=p_task_id;
+      credits_spent=coalesce((SELECT sum(credits) FROM public.provider_calls WHERE video_id=p_task_id AND status IN ('settled','uncertain')),0),updated_at=now() WHERE id=p_task_id;
     UPDATE public.jobs SET status='cf_done',updated_at=now() WHERE id=p_task_id;
     RETURN '{"ok":true}'::jsonb;
   ELSIF p_action='fail' THEN

@@ -15,6 +15,7 @@ export interface Env {
   ENABLE_MEDIA_PILOT: string;
   MEDIA_WORKFLOW: Workflow<{taskId: string}>;
   GENERATION_WORKFLOW: Workflow<{videoId: string}>;
+  GENERATION_STAGE: Workflow<import('./stages').StageParams>;
 }
 
 export interface Asset {sha256: string; url?: string; key?: string;}

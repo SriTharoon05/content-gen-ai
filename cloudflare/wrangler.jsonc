@@ -26,6 +26,7 @@
   },
   "workflows": [
     {"name": "story-shorts-media-pilot", "binding": "MEDIA_WORKFLOW", "class_name": "MediaWorkflow"},
-    {"name": "story-shorts-generation-pilot", "binding": "GENERATION_WORKFLOW", "class_name": "GenerationWorkflow"}
+    {"name": "story-shorts-generation-pilot", "binding": "GENERATION_WORKFLOW", "class_name": "GenerationWorkflow"},
+    {"name": "story-shorts-generation-stage", "binding": "GENERATION_STAGE", "class_name": "GenerationStageWorkflow"}
   ]
 }

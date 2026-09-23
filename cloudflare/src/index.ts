@@ -3,6 +3,7 @@ import {claim,createTask,rpc,heartbeat,finish,loadTask,owned,generation} from '.
 import {assetUpload,digest,resolveAssets,signedUpload,validateManifest,verifyOutput} from './storage';
 export {MediaWorkflow} from './workflow';
 export {GenerationWorkflow} from './generation';
+export {GenerationStageWorkflow} from './stages';
 
 async function authorize(request: Request, secret: string) {
   const supplied = request.headers.get('Authorization') || '';
@@ -29,6 +30,14 @@ export default {
       if (request.method==='OPTIONS') return new Response(null,{status:204,headers});
       if (path==='/health') return reply({ok:true,mode:'isolated-media-pilot',production_ready:false});
       if (env.ENABLE_MEDIA_PILOT !== 'true') throw new ApiError(503,'Media pilot is disabled');
+      if(path==='/migration/assets/recent'&&request.method==='GET'){
+        await authorize(request,env.ADMIN_TOKEN);
+        const url=`https://api.cloudinary.com/v1_1/${env.CLOUDINARY_CLOUD_NAME}/resources/image/upload?prefix=${encodeURIComponent(env.CLOUDINARY_PREFIX+'/assets/image/')}&max_results=100`;
+        const r=await fetch(url,{headers:{Authorization:'Basic '+btoa(`${env.CLOUDINARY_API_KEY}:${env.CLOUDINARY_API_SECRET}`)}});
+        if(!r.ok)throw new ApiError(502,'Cloudinary asset lookup HTTP '+r.status);
+        const b=await r.json() as any;
+        return reply({assets:(b.resources||[]).map((x:any)=>({url:x.secure_url,public_id:x.public_id,bytes:x.bytes,created_at:x.created_at}))});
+      }
       if(path==='/migration/generations'&&request.method==='POST'){
         await authorize(request,env.ADMIN_TOKEN);
         const id=taskId(request.headers.get('Idempotency-Key')||'');const input=await body(request);

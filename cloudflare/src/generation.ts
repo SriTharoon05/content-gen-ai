@@ -4,6 +4,7 @@ import {config,textModel,embedding,geminiSpeech,groqSpeech,speechChunks,transcri
 import {digest,validateManifest} from './storage';
 import type {Env,Manifest} from './types';
 import contract from './contract.json';
+import {runStage} from './stages';
 
 // The exact JSON schemas and editorial skills are exported from backend/app, not forked.
 export function validateSchema(value:any,schema:any,root=schema):void {
@@ -45,44 +46,31 @@ export class GenerationWorkflow extends WorkflowEntrypoint<Env,{videoId:string}>
   async run(event:WorkflowEvent<{videoId:string}>,step:WorkflowStep) {
     const id=event.payload.videoId;
     // Secrets are fetched inside each step and never returned into Workflow state.
-    const checkpoint=async(name:string,fn:(c:any)=>Promise<any>,retries=2):Promise<any>=>{
-      await step.sleep('yield-'+name,'1 second');
-      return step.do(name,{retries:{limit:retries,delay:'30 seconds',backoff:'exponential'},timeout:'15 minutes'},async()=>{
-        const state=await generation(this.env,'status',id);
-        if(Object.prototype.hasOwnProperty.call(state.steps,name))return state.steps[name];
-        const value=await fn(await config(this.env,id));
-        await generation(this.env,'save',id,{key:name,value});return value;
-      });
+    const checkpoint=(name:string,op:string,data:any={},retries=2):Promise<any>=>
+      runStage(this.env,step,`${event.instanceId}-${name}`,{videoId:id,name,op,data,retries});
+    const model=async(name:string,schemaName:keyof typeof contract.schemas,prompt:()=>string,check?:(x:any)=>void)=>{
+      const value=await checkpoint(name,'model',{schema:schemaName,prompt:prompt()});check?.(value);return value;
     };
-    const model=async(name:string,schemaName:keyof typeof contract.schemas,prompt:(c:any)=>string,check?:(x:any)=>void)=>checkpoint(name,async c=>{
-      const value=await textModel(c,context(c)+'\n'+prompt(c),contract.schemas[schemaName]);
-      validateSchema(value,contract.schemas[schemaName]);check?.(value);return value;
-    });
     const media=async(name:string,manifest:Manifest):Promise<any>=>{
-      const tid=await checkpoint(name+'-task',async()=>{
-        const task=(await digest(id+':'+name)).slice(0,32);
-        await createTask(this.env,task,id,validateManifest(manifest,this.env));
-        try{await this.env.MEDIA_WORKFLOW.create({id:task,params:{taskId:task}});}
-        catch(e){try{await(await this.env.MEDIA_WORKFLOW.get(task)).status();}catch{throw e;}}
-        return task;
-      });
+      const tid=await checkpoint(name+'-task','media-submit',{name,manifest});
       for(let n=0;n<120;n++){
-        const t=await step.do(name+'-poll-'+n,async()=>{const t=await loadTask(this.env,tid);return {status:t.status,result:t.result_json};});
-        if(t.status==='succeeded')return {...t.result,duration:t.result.duration??t.result.metrics?.duration};
-        if(t.status==='failed')throw new Error(name+' media task failed; inspect CircleCI');
+        const t=await step.do(name+'-poll-'+n,async()=>{
+          const s=await(await this.env.MEDIA_WORKFLOW.get(tid)).status();return {status:s.status,output:s.output??null};
+        });
+        if(t.status==='complete'){
+          // Older media instances predate the result-bearing completion contract.
+          const row:any=await step.do(name+'-result',()=>loadTask(this.env,tid));
+          if(row.status!=='succeeded')throw new Error(name+' media task failed');
+          return {...row.result_json,duration:row.result_json.duration??row.result_json.metrics?.duration};
+        }
+        if(['errored','terminated'].includes(t.status))throw new Error(name+' media task failed; inspect CircleCI');
         await step.sleep(name+'-wait-'+n,'2 minutes');
       }
       throw new Error(name+' media deadline exceeded');
     };
     try {
       const candidates=await model('concepts','UniqueConceptSet',()=>`Propose exactly five distinct original concepts fitting the channel. Each core_entity/content_angle pair must be novel. ${skill('hooks_and_retention')}`);
-      const concept=await checkpoint('concept',async c=>{
-        for(const candidate of candidates.candidates){
-          const vector=await embedding(c,candidate.core_concept);
-          const r=await generation(this.env,'reserve',id,{...candidate,embedding:vector});if(!r.collision)return r;
-        }
-        throw new Error('All five concepts collided; no generation spend permitted');
-      });
+      const concept=await checkpoint('concept','concept',candidates,0);
       const premise=await model('premise','Premise',()=>`Develop this reserved concept without changing its entity/angle: ${JSON.stringify(concept)}. A distinct 45–75 second story with a hook and a meaningful payoff.`);
       let script=await model('script','Script',()=>`${skill('hooks_and_retention')}\n${skill('audio_direction')}\nPREMISE:${JSON.stringify(premise)}
 Write 20–25 sequential visual beats, up to 30 only if context needs them. shot_id MUST be exactly s001, s002, s003 ... in order, never numeric IDs or other prefixes. 130–180 spoken words, absolute maximum 205. Natural fluent complete thoughts, no robotic fragments. An expressive human voice, contractions, varied rhythm. The first beat must be at most 16 words and give a specific reason to watch. Facts/science use a curiosity question or concrete puzzle, not generic hype. Fiction starts in an intriguing scene, not forced 'do you know'. Every speaker field MUST be the empty string, not Narrator or a voice name.`,validateScript);
@@ -97,20 +85,15 @@ Write 20–25 sequential visual beats, up to 30 only if context needs them. shot
       const voice=await model('voice','VoiceDirection',()=>`${skill('audio_direction')}\nDirect single-narrator delivery for ${JSON.stringify(script)}. Fluent, warm, expressive, unhurried. multi_speaker=false. tagged_transcript must preserve every spoken word.`,v=>{
         if(v.multi_speaker)throw new Error('Single narrator required');
       });
-      let sources=await checkpoint('gemini-audio',async c=>{
-        const audio=await geminiSpeech(this.env,c,plain,voice.directors_notes);return audio?[audio]:[];
-      });
+      let sources=await checkpoint('gemini-audio','gemini-audio',{plain,direction:voice.directors_notes});
       if(!sources.length){
         sources=[];const chunks=speechChunks(plain);
         for(let i=0;i<chunks.length;i++){
           await step.sleep('tts-rate-'+i,'7 seconds');
-          sources.push(await checkpoint('groq-audio-'+i,c=>groqSpeech(this.env,c,chunks[i])));
+          sources.push(await checkpoint('groq-audio-'+i,'groq-audio',{text:chunks[i]}));
         }
       }
-      const settings=await checkpoint('render-settings',async c=>{
-        const s=c.settings;
-        return {video:{...s.video,width:720,height:1280,fps:30},music:s.music,align:s.align,runtime:{ffmpeg_path:'ffmpeg',ffprobe_path:'ffprobe',low_memory_render:true}};
-      });
+      const settings=await checkpoint('render-settings','settings');
       const audioManifest:Manifest={version:1,operation:'prepare_audio',settings,playback_rate:.96,files:{},sources:sources.map((_:any,i:number)=>i===0?'source.audio':`part-${i}.wav`)};
       sources.forEach((a:any,i:number)=>audioManifest.files[audioManifest.sources[i]]=a);
       let ready=await media('audio',audioManifest);
@@ -121,11 +104,8 @@ Write 20–25 sequential visual beats, up to 30 only if context needs them. shot
         ready=await media('audio-fit',{...audioManifest,playback_rate:rate});
       }
       if(!(ready.duration>=45&&ready.duration<=90))throw new Error('Narration outside 45–90 seconds; refusing image spend');
-      const audio=await checkpoint('audio-ready',async()=>{
-        const r=await fetch(ready.url);if(!r.ok)throw new Error('Prepared audio missing');
-        const bytes=await r.arrayBuffer();return {...ready,sha256:Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),x=>x.toString(16).padStart(2,'0')).join('')};
-      });
-      const words=await checkpoint('words',c=>transcribe(c,audio.url));
+      const audio=await checkpoint('audio-ready','audio-ready',ready);
+      const words=await checkpoint('words','words',{url:audio.url});
       const visuals=await model('visuals','VisualPlan',()=>`${skill('image_and_publishing')}\n${skill('motion_and_captions')}\nScript:${JSON.stringify(script)}. One detailed image prompt for EACH exact shot_id. Portrait 9:16, consistent characters/style, no text/watermarks. No reused assets.`,v=>{
         if(v.shots.map((s:any)=>s.shot_id).join()!==script.beats.map((s:any)=>s.shot_id).join())throw new Error('Visual scene IDs differ from script');
       });
@@ -137,12 +117,12 @@ Write 20–25 sequential visual beats, up to 30 only if context needs them. shot
       for(const shot of visuals.shots){
         // Serial requests + >=2 seconds also fit 60 RPM; no burst per provider key.
         await step.sleep('image-rate-'+shot.shot_id,'2 seconds');
-        const a=await checkpoint('image-'+shot.shot_id,c=>image(this.env,id,'image-'+shot.shot_id,c,shot.image_prompt+'\n'+visuals.style_block),0);
+        const a=await checkpoint('image-'+shot.shot_id,'image',{prompt:shot.image_prompt+'\n'+visuals.style_block},0);
         const name='images/'+shot.shot_id+'.png';files[name]=a;images.push(name);
       }
       await model('copy','PublishCopy',()=>`${skill('image_and_publishing')}\nWrite accurate engaging YouTube title/description and separate Instagram caption with relevant hashtags, never promise virality. Script:${JSON.stringify(script)}`);
       const manifest:Manifest={version:1,operation:'assemble_script',files,images,settings,script,words,transitions:edit.transitions,intensity:0,ducking:true,music:null};
-      await checkpoint('render-checkpoint',()=>upload(this.env,new TextEncoder().encode(JSON.stringify(manifest)),'checkpoint','json','application/json'));
+      await checkpoint('render-checkpoint','checkpoint',manifest);
       const result=await media('render',manifest);
       await step.do('finalize-review-only',()=>generation(this.env,'complete',id,result));
       return {videoId:id,status:'AWAITING_APPROVAL',url:result.url};
