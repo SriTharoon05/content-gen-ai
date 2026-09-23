@@ -1,0 +1,14 @@
+# Copy to .dev.vars locally. Never commit filled credentials.
+# Worker DB access uses SUPABASE_URL + server-side SUPABASE_KEY over HTTPS.
+# DATABASE_URL remains only in backend/.env for the local SQL installer.
+ADMIN_TOKEN=
+MEDIA_WORKER_TOKEN=
+CLOUDINARY_CLOUD_NAME=
+CLOUDINARY_API_KEY=
+CLOUDINARY_API_SECRET=
+SUPABASE_URL=
+SUPABASE_KEY=
+CIRCLECI_TOKEN=
+CIRCLECI_PROJECT_SLUG=
+CIRCLECI_PIPELINE_DEFINITION_ID=
+

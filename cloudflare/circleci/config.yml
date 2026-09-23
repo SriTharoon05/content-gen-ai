@@ -1,0 +1,47 @@
+version: 2.1
+parameters:
+  render_task_id:
+    type: string
+    default: ""
+jobs:
+  media-pilot:
+    docker:
+      - image: python:3.12-slim
+    resource_class: medium
+    environment:
+      RENDER_PROFILE: auto
+      RENDER_EXECUTION_BACKEND: local
+      PYTHONUNBUFFERED: "1"
+      RENDER_TASK_ID: << pipeline.parameters.render_task_id >>
+    steps:
+      - run:
+          name: Install canonical FFmpeg runtime
+          command: apt-get update && apt-get install -y --no-install-recommends git openssh-client ffmpeg ca-certificates curl
+      - checkout
+      - restore_cache:
+          keys:
+            - cf-media-py312-v1-{{ checksum "backend/requirements.txt" }}
+      - run:
+          name: Install canonical media dependencies and fonts
+          command: |
+            python -m venv /tmp/media-venv
+            /tmp/media-venv/bin/pip install -r backend/requirements.txt
+            /tmp/media-venv/bin/python backend/scripts/setup_caption_assets.py
+      - save_cache:
+          key: cf-media-py312-v1-{{ checksum "backend/requirements.txt" }}
+          paths:
+            - ~/.cache/pip
+      - run:
+          name: Execute media only, no generation or publishing
+          no_output_timeout: 60m
+          command: /tmp/media-venv/bin/python cloudflare/scripts/media_worker.py
+workflows:
+  cloudflare-media-pilot:
+    when:
+      and:
+        - equal: [api, << pipeline.trigger.type >>]
+        - not:
+            equal: ["", << pipeline.parameters.render_task_id >>]
+    jobs:
+      - media-pilot:
+          context: story-shorts-cloudflare

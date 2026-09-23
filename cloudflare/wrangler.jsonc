@@ -1,0 +1,31 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "story-shorts-cloudflare-pilot",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-23",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "vars": {
+    "ENABLE_MEDIA_PILOT": "true",
+    "CIRCLECI_BRANCH": "codex/cloudflare-fresh-generation",
+    "CLOUDINARY_PREFIX": "story-shorts-cloudflare",
+    "CORS_ORIGINS": "http://localhost:5173"
+  },
+    "observability": {
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "invocation_logs": true,
+      "persist": true
+    },
+    "traces": {
+      "enabled": false,
+      "head_sampling_rate": 1,
+      "persist": true
+    }
+  },
+  "workflows": [
+    {"name": "story-shorts-media-pilot", "binding": "MEDIA_WORKFLOW", "class_name": "MediaWorkflow"},
+    {"name": "story-shorts-generation-pilot", "binding": "GENERATION_WORKFLOW", "class_name": "GenerationWorkflow"}
+  ]
+}
