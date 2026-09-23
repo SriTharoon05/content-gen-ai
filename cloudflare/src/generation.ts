@@ -117,7 +117,8 @@ Write 20–25 sequential visual beats, up to 30 only if context needs them. shot
       const files:Manifest['files']={'narration.wav':{url:audio.url,sha256:audio.sha256}};const images:string[]=[];
       for(const shot of visuals.shots){
         // Serial requests + >=2 seconds also fit 60 RPM; no burst per provider key.
-        await step.sleep('image-rate-'+shot.shot_id,'2 seconds');
+        if(!Object.prototype.hasOwnProperty.call(initial.steps,'image-'+shot.shot_id)&&completed<8)
+          await step.sleep('image-rate-'+shot.shot_id,'2 seconds');
         // Retries read the DB checkpoint/settled ledger before making any new purchase.
         // An uncertain reservation still fails closed; a post-save platform failure can recover.
         const a=await checkpoint('image-'+shot.shot_id,'image',{prompt:shot.image_prompt+'\n'+visuals.style_block},2);

@@ -164,7 +164,7 @@ Create another GitHub App pipeline:
 | Name | `story-shorts-cloudflare-media-pilot` |
 | Config repository / checkout repository | `SriTharoon05/content-gen-ai` |
 | Config path | `cloudflare/circleci/config.yml` |
-| Branch / checkout branch | `main` |
+| Branch / checkout branch | `codex/cloudflare-fresh-generation` during isolated testing; `main` only after merge |
 | VCS / scheduled triggers | None; API only |
 | Resource class | Already `medium` in YAML |
 

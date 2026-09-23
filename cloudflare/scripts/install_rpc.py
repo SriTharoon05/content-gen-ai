@@ -67,9 +67,24 @@ def main():
                 assert gen('call_finish',fresh,{'key':'image','value':{'test':True}})['ok']
                 assert gen('call_start',fresh,{'key':'image','provider':'pollinations','model':'test','credits':.001})['detail_json']['test']
                 assert gen('complete',fresh,{'url':'invalid'})['status']==409
+                finaltask=uuid.uuid4().hex
+                call('create',finaltask,{'video_id':fresh,'manifest':{'version':1,'operation':'assemble_script'}})
+                call('claim',finaltask,{'owner_hash':'c'*64})
+                call('finish',finaltask,{'owner_hash':'c'*64,'status':'succeeded','result':{'duration':60}})
+                for key,value in {'render-task':finaltask,'audio-ready':{'url':'https://res.cloudinary.com/test/video/upload/audio.wav','duration':60,'sha256':'a'*64},
+                    'script':{},'premise':{},'qa':{'passed':True},'voice':{},'visuals':{'shots':[{'shot_id':'s001'}]},
+                    'image-s001':{'url':'https://res.cloudinary.com/test/image/upload/image.png','sha256':'b'*64},
+                    'copy':{'youtube_title':'Fixture','youtube_description':'Fixture description','instagram_caption':'Fixture caption'}}.items():
+                    gen('save',fresh,{'key':key,'value':value})
+                assert gen('complete',fresh,{'url':'https://res.cloudinary.com/test/video/upload/final.mp4','duration':60})['ok']
+                assert gen('complete',fresh,{})['ok']
+                assert gen('status',fresh)['state']=='AWAITING_APPROVAL'
+                approved=connection.execute(text('SELECT approved FROM public.videos WHERE id=:id'),{'id':fresh}).scalar_one()
+                assert not approved
+                assert connection.execute(text('SELECT count(*) FROM public.assets WHERE video_id=:id'),{'id':fresh}).scalar_one()==2
                 for role in ('anon','authenticated'):
                     assert not connection.execute(text("SELECT has_function_privilege(:r,'public.cf_generation(text,text,jsonb)','EXECUTE')"),{'r':role}).scalar()
-                print('Generation create/replay, checkpoints, pgvector reservation, paid-call reservation and access checks passed')
+                print('Generation create/replay, checkpoints, pgvector, purchase ledger, review-only completion/assets and access checks passed')
             finally:
                 savepoint.rollback()
             if args.apply:

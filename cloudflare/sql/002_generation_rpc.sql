@@ -88,7 +88,7 @@ BEGIN
       output_path=p_payload->>'url',duration_seconds=(p_payload->>'duration')::float,
       narration_path=data->'audio-ready'->>'url',narration_seconds=(data->'audio-ready'->>'duration')::float,
       script_json=data->'script',premise_json=data->'premise',visual_json=data->'visuals',qa_json=data->'qa',voice_json=data->'voice',
-      title=data->'copy'->>'youtube_title',description=data->'copy'->>'youtube_description',instagram_caption=data->'copy'->>'instagram_caption',hashtags=data->'copy'->'hashtags',
+      title=data->'copy'->>'youtube_title',description=data->'copy'->>'youtube_description',instagram_caption=data->'copy'->>'instagram_caption',hashtags=coalesce(data->'copy'->'hashtags','[]'::jsonb),
       image_count=jsonb_array_length(data->'visuals'->'shots'),reused_count=0,
       credits_spent=coalesce((SELECT sum(credits) FROM public.provider_calls WHERE video_id=p_task_id AND status IN ('settled','uncertain')),0),updated_at=now() WHERE id=p_task_id;
     UPDATE public.jobs SET status='cf_done',updated_at=now() WHERE id=p_task_id;
