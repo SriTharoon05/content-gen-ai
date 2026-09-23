@@ -92,7 +92,15 @@ export default {
           return reply(await signedUpload(env,id,task.manifest_json.operation));
         }
         if (!['succeeded','failed'].includes(data.status)) throw new ApiError(400,'Invalid completion status');
-        const result=data.status==='succeeded' ? {...await verifyOutput(env,id,task.manifest_json.operation),metrics:data.metrics||{}} : {};
+        let result:any={};
+        if(data.status==='succeeded'){
+          const verified=await verifyOutput(env,id,task.manifest_json.operation);
+          const measured=Number(data.metrics?.duration);
+          if(!Number.isFinite(measured)||measured<=0||measured>600)throw new ApiError(409,'Missing measured output duration');
+          if(verified.duration!=null&&Math.abs(verified.duration-measured)>.2)throw new ApiError(409,'Output duration disagrees with canonical probe');
+          // Cloudinary omits duration for some WAV resources; the trusted canonical ffprobe result supplies it.
+          result={...verified,duration:verified.duration??measured,metrics:data.metrics||{}};
+        }
         // Never store raw signed URLs or provider exceptions as error strings.
         await finish(env,id,hash,data.status,result,data.status==='failed'?'CircleCI media processing failed; inspect sanitized job logs':'');
         try {await (await env.MEDIA_WORKFLOW.get(id)).sendEvent({type:'media-complete',payload:{taskId:id}});} catch { /* Workflow reconciles DB. */ }

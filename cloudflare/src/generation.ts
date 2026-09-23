@@ -68,7 +68,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<Env,{videoId:string}>
       });
       for(let n=0;n<120;n++){
         const t=await step.do(name+'-poll-'+n,async()=>{const t=await loadTask(this.env,tid);return {status:t.status,result:t.result_json};});
-        if(t.status==='succeeded')return t.result;
+        if(t.status==='succeeded')return {...t.result,duration:t.result.duration??t.result.metrics?.duration};
         if(t.status==='failed')throw new Error(name+' media task failed; inspect CircleCI');
         await step.sleep(name+'-wait-'+n,'2 minutes');
       }
@@ -113,7 +113,13 @@ Write 20–25 sequential visual beats, up to 30 only if context needs them. shot
       });
       const audioManifest:Manifest={version:1,operation:'prepare_audio',settings,playback_rate:.96,files:{},sources:sources.map((_:any,i:number)=>i===0?'source.audio':`part-${i}.wav`)};
       sources.forEach((a:any,i:number)=>audioManifest.files[audioManifest.sources[i]]=a);
-      const ready=await media('audio',audioManifest);
+      let ready=await media('audio',audioManifest);
+      // Measure first. A slight tempo correction uses the same newly-generated narration,
+      // not another TTS call; ASR always runs AFTER the final audio preparation.
+      if(ready.duration>90&&ready.duration<=110){
+        const rate=.96*ready.duration/88;
+        ready=await media('audio-fit',{...audioManifest,playback_rate:rate});
+      }
       if(!(ready.duration>=45&&ready.duration<=90))throw new Error('Narration outside 45–90 seconds; refusing image spend');
       const audio=await checkpoint('audio-ready',async()=>{
         const r=await fetch(ready.url);if(!r.ok)throw new Error('Prepared audio missing');

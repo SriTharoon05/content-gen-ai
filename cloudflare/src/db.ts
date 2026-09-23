@@ -14,7 +14,8 @@ export async function rpc(env:Env,action:string,id:string='',payload:Record<stri
     throw new ApiError(502,`Database API operation failed (${code})`);
   }
   const result=await response.json() as any;
-  if(result?.error) throw new ApiError(result.status||409,result.error);
+  // Row error fields describe failed jobs; only the explicit numeric RPC envelope is an HTTP failure.
+  if(result?.error && Number.isInteger(result.status)) throw new ApiError(result.status,result.error);
   return result;
 }
 export const generation=(env:Env,action:string,id:string,payload:Record<string,any>={})=>rpc(env,action,id,payload,'cf_generation');

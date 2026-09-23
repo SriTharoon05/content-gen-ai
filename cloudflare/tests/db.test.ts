@@ -27,6 +27,13 @@ test('unknown task is a 404, not a connection failure',async()=>{
   try {await assert.rejects(()=>rpc(env,'load'),(error:any)=>error.status===404);}
   finally {globalThis.fetch=original;}
 });
+
+test('failed task row is readable and not mistaken for an RPC error envelope',async()=>{
+  const original=globalThis.fetch;
+  globalThis.fetch=async()=>Response.json({id:'a'.repeat(32),status:'failed',error:'Media failed'});
+  try {assert.equal((await rpc(env,'load')).status,'failed');}
+  finally {globalThis.fetch=original;}
+});
 test('claim duplicate and completion wrappers preserve ownership',async()=>{
   const original=globalThis.fetch;let payload:any;
   globalThis.fetch=async(_url,options)=>{payload=JSON.parse(String(options?.body));return new Response('{}');};
