@@ -37,7 +37,9 @@ BEGIN
   ELSIF p_action='save' THEN
     k:=p_payload->>'key'; data:=p_payload->'value';
     IF k IS NULL OR k !~ '^[a-z0-9_-]{1,64}$' THEN RETURN '{"error":"Invalid checkpoint","status":400}'::jsonb; END IF;
-    UPDATE public.videos SET options_json=jsonb_set(options_json::jsonb,ARRAY['cf_steps',k],data),stage_detail=left(k,160),updated_at=now() WHERE id=p_task_id;
+    UPDATE public.videos SET options_json=jsonb_set(options_json::jsonb,ARRAY['cf_steps',k],data),stage_detail=left(k,160),
+      state=CASE WHEN state='CF_FAILED' THEN 'CF_GENERATING' ELSE state END,
+      error=CASE WHEN state='CF_FAILED' THEN '' ELSE error END,updated_at=now() WHERE id=p_task_id;
     RETURN data;
   ELSIF p_action='reserve' THEN
     -- Same permanent entity/angle and adaptive pgvector collision policy as content_ledger.py.
