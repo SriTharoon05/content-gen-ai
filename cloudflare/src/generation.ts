@@ -42,12 +42,27 @@ PRIOR CONCEPTS TO AVOID: ${JSON.stringify(c.prior)}`;
 }
 const skill=(name:string)=>(contract.skills as Record<string,string>)[name+'.md']||'';
 
-export class GenerationWorkflow extends WorkflowEntrypoint<Env,{videoId:string}> {
-  async run(event:WorkflowEvent<{videoId:string}>,step:WorkflowStep) {
+class Continued extends Error {}
+export class GenerationWorkflow extends WorkflowEntrypoint<Env,{videoId:string;segment?:number;runKey?:string}> {
+  async run(event:WorkflowEvent<{videoId:string;segment?:number;runKey?:string}>,step:WorkflowStep) {
     const id=event.payload.videoId;
+    const initial:any=await step.do('load-checkpoints',()=>generation(this.env,'status',id));
+    let completed=0;
     // Secrets are fetched inside each step and never returned into Workflow state.
-    const checkpoint=(name:string,op:string,data:any={},retries=2):Promise<any>=>
-      runStage(this.env,step,`${event.instanceId}-${name}`,{videoId:id,name,op,data,retries});
+    const checkpoint=async(name:string,op:string,data:any={},retries=2):Promise<any>=>{
+      if(Object.prototype.hasOwnProperty.call(initial.steps,name))return initial.steps[name];
+      if(completed>=8){
+        const segment=(event.payload.segment||0)+1;const runKey=event.payload.runKey||event.instanceId;
+        await step.do('continue-generation',async()=>{
+          const next=`${runKey}-p${segment}`;
+          try{await this.env.GENERATION_WORKFLOW.create({id:next,params:{videoId:id,segment,runKey}});}
+          catch(e){try{await(await this.env.GENERATION_WORKFLOW.get(next)).status();}catch{throw e;}}
+        });
+        throw new Continued();
+      }
+      const value=await runStage(this.env,step,`${event.instanceId}-${name}`,{videoId:id,name,op,data,retries,parentId:event.instanceId,parentKind:'generation'});
+      completed++;return value;
+    };
     const model=async(name:string,schemaName:keyof typeof contract.schemas,prompt:()=>string,check?:(x:any)=>void)=>{
       const value=await checkpoint(name,'model',{schema:schemaName,prompt:prompt()});check?.(value);return value;
     };
@@ -127,6 +142,7 @@ Write 20–25 sequential visual beats, up to 30 only if context needs them. shot
       await step.do('finalize-review-only',()=>generation(this.env,'complete',id,result));
       return {videoId:id,status:'AWAITING_APPROVAL',url:result.url};
     } catch(error) {
+      if(error instanceof Continued)return {videoId:id,status:'continued'};
       const message=error instanceof Error?error.message:'Generation failed';
       await step.do('record-failure',()=>generation(this.env,'fail',id,{error:message.slice(0,450)}));
       throw new Error(message);

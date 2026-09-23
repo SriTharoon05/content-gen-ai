@@ -6,22 +6,22 @@ import {validateSchema,validateScript} from './generation';
 import contract from './contract.json';
 import type {Env} from './types';
 
-export interface StageParams {videoId:string;name:string;op:string;data:any;retries:number;}
+export interface StageParams {videoId:string;name:string;op:string;data:any;retries:number;parentId?:string;parentKind?:'generation'|'media';}
 export async function runStage(env:Env,step:WorkflowStep,id:string,p:StageParams):Promise<any> {
   await step.do('start-'+p.name,async()=>{
     try{await env.GENERATION_STAGE.create({id,params:p});}
     catch(e){try{await(await env.GENERATION_STAGE.get(id)).status();}catch{throw e;}}
   });
-  for(let i=0;i<100;i++){
-    const state=await step.do('status-'+p.name+'-'+i,async()=>{
-      const s=await(await env.GENERATION_STAGE.get(id)).status();
-      return {status:s.status,output:s.output??null,error:s.error?.message??''};
-    });
+  try {
+    const event=await step.waitForEvent<any>('done-'+p.name,{type:'stage-'+p.name,timeout:'16 minutes'});
+    if(!event.payload.ok)throw new Error(p.name+': '+event.payload.error);
+    return event.payload.value;
+  } catch(error) {
+    // One reconciliation lookup if callback delivery was lost; no high-frequency binding polling.
+    const state=await step.do('reconcile-'+p.name,async()=>{const s=await(await env.GENERATION_STAGE.get(id)).status();return {status:s.status,output:s.output??null};});
     if(state.status==='complete')return state.output;
-    if(['errored','terminated'].includes(state.status))throw new Error(p.name+': '+state.error);
-    await step.sleep('wait-'+p.name+'-'+i,'10 seconds');
+    throw error;
   }
-  throw new Error(p.name+' exceeded stage deadline');
 }
 function context(c:any) {
   const channel=c.channel;
@@ -33,7 +33,13 @@ PRIOR CONCEPTS:${JSON.stringify(c.prior.slice(0,30))}`;
 export class GenerationStageWorkflow extends WorkflowEntrypoint<Env,StageParams> {
   async run(event:WorkflowEvent<StageParams>,step:WorkflowStep) {
     const p=event.payload;
-    return step.do('execute',{retries:{limit:p.retries,delay:'30 seconds',backoff:'exponential'},timeout:'15 minutes'},async()=>{
+    const notify=async(payload:any)=>{
+      if(!p.parentId)return;
+      const binding=p.parentKind==='media'?this.env.MEDIA_WORKFLOW:this.env.GENERATION_WORKFLOW;
+      await(await binding.get(p.parentId)).sendEvent({type:'stage-'+p.name,payload});
+    };
+    try {
+    const value=await step.do('execute',{retries:{limit:p.retries,delay:'30 seconds',backoff:'exponential'},timeout:'15 minutes'},async()=>{
       const {videoId:id,name,op,data}=p;
       // These child stages each get their own Free-plan external-subrequest budget.
       if(op==='media-inspect'){await expire(this.env,id);const t=await loadTask(this.env,id);return {status:t.status,result:t.result_json};}
@@ -86,5 +92,10 @@ export class GenerationStageWorkflow extends WorkflowEntrypoint<Env,StageParams>
       }
       await generation(this.env,'save',id,{key:name,value});return value;
     });
+    await step.do('notify-success',()=>notify({ok:true,value}));return value;
+    }catch(error){
+      const message=error instanceof Error?error.message:'Stage failed';
+      await step.do('notify-failure',()=>notify({ok:false,error:message}));throw error;
+    }
   }
 }

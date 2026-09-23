@@ -14,7 +14,7 @@ export interface Env {
   CORS_ORIGINS: string;
   ENABLE_MEDIA_PILOT: string;
   MEDIA_WORKFLOW: Workflow<{taskId: string}>;
-  GENERATION_WORKFLOW: Workflow<{videoId: string}>;
+  GENERATION_WORKFLOW: Workflow<{videoId: string;segment?:number;runKey?:string}>;
   GENERATION_STAGE: Workflow<import('./stages').StageParams>;
 }
 

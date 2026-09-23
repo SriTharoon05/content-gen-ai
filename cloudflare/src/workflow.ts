@@ -9,11 +9,11 @@ export class MediaWorkflow extends WorkflowEntrypoint<Env, {taskId: string}> {
     // Durable events wake immediately; ten-minute DB checks recover a lost callback.
     // No media bytes or credentials are stored in Workflow step results.
     for (let round = 0; round < 25; round++) {
-      const inspected=await runStage(this.env,step,`${id}-inspect-${round}`,{videoId:id,name:`inspect-${round}`,op:'media-inspect',data:{},retries:2});
+      const inspected=await runStage(this.env,step,`${id}-inspect-${round}`,{videoId:id,name:`inspect-${round}`,op:'media-inspect',data:{},retries:2,parentId:event.instanceId,parentKind:'media'});
       const status=inspected.status;
       if (status === 'succeeded' || status === 'failed') return {taskId:id,status};
-      if (status === 'queued') {
-        try {await runStage(this.env,step,`${id}-trigger-${round}`,{videoId:id,name:`trigger-${round}`,op:'media-trigger',data:{},retries:2});} catch {
+      if (status === 'queued' && round<3) {
+        try {await runStage(this.env,step,`${id}-trigger-${round}`,{videoId:id,name:`trigger-${round}`,op:'media-trigger',data:{},retries:2,parentId:event.instanceId,parentKind:'media'});} catch {
           await step.do(`trigger-error-${round}`, async () => {
             await triggerFailed(this.env,id);
           });
