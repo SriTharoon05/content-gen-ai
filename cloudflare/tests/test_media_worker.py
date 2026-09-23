@@ -14,6 +14,25 @@ spec.loader.exec_module(worker)
 
 
 class MediaTests(unittest.TestCase):
+    def test_fresh_bundle_uses_measured_words_and_canonical_timeline(self):
+        import json
+        from app.settings_store import DEFAULTS
+        beats=[{'shot_id':f's{i:03}','narration':'Could this old mystery have another surprising answer?','emphasis_words':[]} for i in range(1,21)]
+        words=' '.join(b['narration'] for b in beats).split()
+        heard=[{'word':w,'start':.12+i*.37,'end':.12+i*.37+.3} for i,w in enumerate(words)]
+        manifest={'version':1,'operation':'assemble_script','settings':DEFAULTS,
+            'script':{'hook_kind':'question','hook':beats[0]['narration'],'beats':beats},'words':heard,
+            'images':[f'images/{b["shot_id"]}.png' for b in beats],
+            'transitions':[{'shot_id':b['shot_id'],'kind':'zoom_out','duration_ms':300} for b in beats]}
+        with tempfile.TemporaryDirectory() as folder, patch('app.audio.probe_duration',return_value=60),patch('app.audio.speech_window',return_value=(.12,59.8)),patch('app.captions.analyze_audio',return_value=([],[])):
+            root=Path(folder); result=worker.prepare_script_bundle(manifest,root)
+            self.assertEqual(result['operation'],'assemble')
+            self.assertEqual(result['timeline']['total_frames'],1800)
+            self.assertEqual(len(result['images']),20)
+            report=json.loads((root/'caption-timing.json').read_text())
+            self.assertEqual(report['heard_words'],len(words))
+            self.assertTrue((root/'captions.ass').exists())
+
     @unittest.skipUnless(shutil.which('ffmpeg'), 'FFmpeg not installed')
     def test_real_audio_preparation_preserves_readable_wav(self):
         with tempfile.TemporaryDirectory() as folder:

@@ -90,7 +90,9 @@ def prepare_script_bundle(manifest, root):
         _,pitches=analyze_audio(audio,root)
         emphasis={normalized(w) for b in script.beats for w in b.emphasis_words}
         stats=write_ass(captions,pitches,emphasis,root/'captions.ass',total)
-        timing_report(root/'caption-timing.json',{'reference':reference,'captions':captions,'match_ratio':ratio,'source':'groq:whisper-large-v3-turbo','speech_window':[first,last]},spans,pitches,stats)
+        timing_report(root/'caption-timing.json',{'reference':reference,'captions':captions,'match_ratio':ratio,
+            'source':'groq:whisper-large-v3-turbo','caption_source':'groq:whisper-large-v3-turbo:verbatim',
+            'heard_words':len(heard),'speech_window':[first,last]},spans,pitches,stats)
         return {**manifest,'operation':'assemble','images':[manifest['images'][i] for i in kept],
             'transitions':transitions,'timeline':asdict(timeline)}
 
