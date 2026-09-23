@@ -27,10 +27,12 @@ export function validateSchema(value:any,schema:any,root=schema):void {
 }
 export function validateScript(s:any) {
   validateSchema(s,contract.schemas.Script);
-  if(s.beats.length<20||s.beats.length>30)throw new Error('Use 20–30 contextual scenes');
+  if(s.beats.length<20||s.beats.length>30)throw new Error(`Expected 20–30 contextual scenes; received ${s.beats.length}`);
   if(s.beats.some((b:any,i:number)=>b.shot_id!==`s${String(i+1).padStart(3,'0')}`||b.speaker))throw new Error('Invalid single-narrator scene IDs');
   const count=s.beats.reduce((n:number,b:any)=>n+b.narration.trim().split(/\s+/).length,0);
-  if(count<130||count>205||s.beats[0].narration.split(/\s+/).length>16)throw new Error('Script pacing bounds');
+  if(count<130||count>205)throw new Error(`Expected 130–205 spoken words; received ${count}`);
+  const hookWords=s.beats[0].narration.trim().split(/\s+/).length;
+  if(hookWords>16)throw new Error(`Opening must be at most 16 words; received ${hookWords}`);
 }
 const skill=(name:string)=>(contract.skills as Record<string,string>)[name+'.md']||'';
 

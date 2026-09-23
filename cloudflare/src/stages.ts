@@ -5,6 +5,7 @@ import {digest,validateManifest} from './storage';
 import {validateSchema,validateScript} from './generation';
 import contract from './contract.json';
 import type {Env} from './types';
+import {scriptWithRepair} from './scriptRepair';
 
 export interface StageParams {videoId:string;name:string;op:string;data:any;retries:number;parentId?:string;parentKind?:'generation'|'media';}
 export async function runStage(env:Env,step:WorkflowStep,id:string,p:StageParams):Promise<any> {
@@ -68,8 +69,13 @@ export class GenerationStageWorkflow extends WorkflowEntrypoint<Env,StageParams>
         const c=await config(this.env,id);
         if(op==='model'){
           const schema=(contract.schemas as any)[data.schema];
-          value=await textModel(c,context(c)+'\n'+data.prompt,schema);validateSchema(value,schema);
-          if(data.schema==='Script')validateScript(value);
+          if(data.schema==='Script') {
+            value=await scriptWithRepair(c,context(c)+'\n'+data.prompt,schema,
+              state.steps[name+'-validation'],textModel,validateScript,
+              value=>generation(this.env,'save',id,{key:name+'-validation',value}));
+          } else {
+            value=await textModel(c,context(c)+'\n'+data.prompt,schema);validateSchema(value,schema);
+          }
           if(data.schema==='VoiceDirection'&&value.multi_speaker)throw new Error('Single narrator required');
           if(['VisualPlan','EditPlan'].includes(data.schema)){
             const expected=state.steps.script.beats.map((x:any)=>x.shot_id).join();
