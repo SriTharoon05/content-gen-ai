@@ -581,6 +581,11 @@ def list_videos(channel: str | None = None, state: str | None = None, limit: int
 
         out = []
         by_parent = {}
+        from .generation_timing import generation_timing
+        timing_jobs = {}
+        for job in session.scalars(select(Job).where(Job.video_id.in_([r.id for r in rows]),
+                                                    Job.stage.in_(['produce_video', 'cf_generation']))):
+            timing_jobs.setdefault(job.video_id, []).append(job)
         for child in session.scalars(select(Video).where(Video.parent_id.in_([r.id for r in rows]))):
             by_parent.setdefault(child.parent_id, []).append(child)
         for video in rows:
@@ -591,6 +596,7 @@ def list_videos(channel: str | None = None, state: str | None = None, limit: int
                  "has_output": _output_exists(c.output_path)}
                 for c in children
             ]))
+            out[-1]['generation_timing'] = generation_timing(video, timing_jobs.get(video.id, []))
         return {"videos": out}
 
 
@@ -604,7 +610,10 @@ def get_video(video_id: str) -> dict:
             select(Decision).where(Decision.video_id == video_id).order_by(Decision.created_at)
         ).all()
         children = session.query(Video).filter_by(parent_id=video_id).all()
+        from .generation_timing import generation_timing
         payload = {
+            'generation_timing': generation_timing(video, session.scalars(select(Job).where(
+                Job.video_id == video_id, Job.stage.in_(['produce_video', 'cf_generation']))).all()),
             **video_view(video, [
                 {"id": c.id, "language": c.language, "language_name": language_name(c.language),
                  "state": c.state, "progress": c.progress, "duration_seconds": c.duration_seconds, "image_model":(c.options_json or {}).get('comparison_model'),

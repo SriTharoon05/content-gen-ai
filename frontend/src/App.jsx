@@ -10,6 +10,7 @@ import Jobs from './pages/Jobs.jsx'
 import Settings from './pages/Settings.jsx'
 import Integrations from './pages/Integrations.jsx'
 import { setToken } from './api'
+import BackendSwitch from './components/BackendSwitch'
 
 const PAGES = [
   { key: 'dashboard', label: 'Dashboard', icon: '◆' },
@@ -144,6 +145,7 @@ export default function App() {
             <b>Cannot reach the backend.</b>
             <p style={{ margin: '8px 0 0' }}>{bootError}</p>
           </div>
+          <BackendSwitch />
           <button className="btn primary" style={{ marginTop: 14 }} onClick={loadAll}>Retry</button>
           <p className="muted">For a protected deployment, enter your dashboard admin token and retry.</p>
           <input type="password" placeholder="Admin token" aria-label="Dashboard admin token" onChange={e => setToken(e.target.value)} />
@@ -157,6 +159,7 @@ export default function App() {
       <Sidebar page={page} setPage={navigate} openVideo={openVideo} />
       <div className="main">
         <header className="workspace-header"><div>Workspace <span>/</span> <b>{openVideo ? 'Video workspace' : PAGES.find(p => p.key === page)?.label}</b></div><span className="workspace-badge">● Creator studio</span></header>
+        <BackendSwitch />
         <nav className="mobile-nav" aria-label="Workspace navigation">{PAGES.map(p => <button key={p.key} className={page === p.key ? 'active' : ''} onClick={() => navigate(p.key)}>{p.label}</button>)}</nav>
         {openVideo ? (
           <VideoDetail key={openVideo} videoId={openVideo} onClose={closeVideo} onOpenVideo={goToVideo} />

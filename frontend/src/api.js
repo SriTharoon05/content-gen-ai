@@ -1,11 +1,13 @@
-const BASE = (import.meta.env.VITE_API_BASE || '/api').replace(/\/$/, '')
+import { backendBase, backendToken, selectedBackend } from './backendChoice'
+const BASE = backendBase()
 
 export function getToken() {
-  return localStorage.getItem('storyshorts.token') || ''
+  return backendToken()
 }
 export function setToken(value) {
-  if (value) localStorage.setItem('storyshorts.token', value)
-  else localStorage.removeItem('storyshorts.token')
+  const key = selectedBackend() === 'render' ? 'storyshorts.token' : 'storyshorts.cloudflare.token'
+  if (value) localStorage.setItem(key, value)
+  else localStorage.removeItem(key)
 }
 
 async function request(path, { method = 'GET', body, raw } = {}) {

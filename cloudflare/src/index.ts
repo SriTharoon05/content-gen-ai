@@ -30,6 +30,26 @@ export default {
       if (request.method==='OPTIONS') return new Response(null,{status:204,headers});
       if (path==='/health') return reply({ok:true,mode:'isolated-media-pilot',production_ready:false});
       if (env.ENABLE_MEDIA_PILOT !== 'true') throw new ApiError(503,'Media pilot is disabled');
+      if(['/api/channels','/api/videos'].includes(path)&&request.method==='GET'){
+        await authorize(request,env.ADMIN_TOKEN);
+        return reply(await rpc(env,path.split('/').pop()!,'',{},'cf_dashboard'));
+      }
+      if(path==='/api/health'&&request.method==='GET'){
+        await authorize(request,env.ADMIN_TOKEN);
+        return reply({ok:true,backend:'cloudflare',production_ready:false,capabilities:['english_generation','preview','timing']});
+      }
+      const runMatch=path.match(/^\/api\/channels\/([a-z0-9_-]{1,64})\/run$/);
+      if(runMatch&&request.method==='POST'){
+        await authorize(request,env.ADMIN_TOKEN);
+        const input=await body(request);
+        if(Object.keys(input).some(k=>!['review_required'].includes(k))||input.review_required!==true)
+          throw new ApiError(422,'Cloudflare currently supports review-only English single-narrator runs');
+        const id=taskId(request.headers.get('Idempotency-Key')||'');
+        await generation(env,'create',id,{channel:runMatch[1]});
+        try{await env.GENERATION_WORKFLOW.create({id,params:{videoId:id}});}
+        catch(e){try{await(await env.GENERATION_WORKFLOW.get(id)).status();}catch{throw e;}}
+        return reply({video_id:id,review_required:true},202);
+      }
       if(path==='/migration/assets/recent'&&request.method==='GET'){
         await authorize(request,env.ADMIN_TOKEN);
         const url=`https://api.cloudinary.com/v1_1/${env.CLOUDINARY_CLOUD_NAME}/resources/image/upload?prefix=${encodeURIComponent(env.CLOUDINARY_PREFIX+'/assets/image/')}&max_results=100`;

@@ -9,7 +9,7 @@
     "ENABLE_MEDIA_PILOT": "true",
     "CIRCLECI_BRANCH": "codex/cloudflare-fresh-generation",
     "CLOUDINARY_PREFIX": "story-shorts-cloudflare",
-    "CORS_ORIGINS": "http://localhost:5173"
+    "CORS_ORIGINS": "http://localhost:5173,http://127.0.0.1:5173"
   },
     "observability": {
     "logs": {

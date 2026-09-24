@@ -21,6 +21,7 @@ def main():
             with connection.connection.driver_connection.cursor() as cursor:
                 cursor.execute(sql)
                 cursor.execute((Path(__file__).resolve().parents[1]/'sql'/'002_generation_rpc.sql').read_text())
+                cursor.execute((Path(__file__).resolve().parents[1]/'sql'/'003_dashboard_rpc.sql').read_text())
             def call(action,task='',payload=None):
                 return connection.execute(text('SELECT public.cf_media_task(:a,:id,CAST(:p AS jsonb))'),
                     {'a':action,'id':task,'p':json.dumps(payload or {})}).scalar_one()
@@ -56,6 +57,12 @@ def main():
                 assert gen('create',fresh,{'channel':'curionerve'})['status']==409
                 assert gen('status',fresh)['state']=='CF_GENERATING'
                 assert gen('config',fresh)['channel']['slug']=='lorehush'
+                dashboard=connection.execute(text("SELECT public.cf_dashboard('videos','')")).scalar_one()
+                item=next(v for v in dashboard['videos'] if v['id']==fresh)
+                assert item['generation_timing']['status']=='running'
+                assert not {'options_json','keys','cf_steps'}.intersection(item)
+                for role in ('anon','authenticated'):
+                    assert not connection.execute(text("SELECT has_function_privilege(:r,'public.cf_dashboard(text,text,jsonb)','EXECUTE')"),{'r':role}).scalar()
                 other=uuid.uuid4().hex
                 assert gen('create',other,{'channel':'lorehush'})['id']==other
                 rate_model='rate-fixture-'+fresh

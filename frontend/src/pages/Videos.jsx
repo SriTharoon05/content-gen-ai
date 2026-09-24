@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { api, moneyShort } from '../api'
 import { useStore } from '../store.jsx'
 import { Select, StatePill, Progress, Empty } from '../components/ui.jsx'
+import GenerationTime from '../components/GenerationTime'
 
 const STATES = ['', 'QUEUED', 'PREMISE', 'SCRIPT', 'QA', 'VOICE', 'NARRATION', 'ALIGNING', 'VISUALS',
   'IMAGES', 'EDITING', 'CAPTIONS', 'RENDERING', 'COPY', 'AWAITING_APPROVAL', 'READY', 'FAILED']
@@ -45,7 +46,7 @@ export default function Videos({ onOpenVideo }) {
         ) : (
           <table>
             <thead>
-              <tr><th>Channel</th><th>Title</th><th>Image model</th><th>Languages</th><th>State</th><th>Duration</th><th>Cost</th><th>Created</th></tr>
+              <tr><th>Channel</th><th>Title</th><th>Image model</th><th>Languages</th><th>State</th><th>Video length</th><th>Generation time</th><th>Cost</th><th>Created</th></tr>
             </thead>
             <tbody>
               {videos.map((v) => (
@@ -67,6 +68,7 @@ export default function Videos({ onOpenVideo }) {
                     {v.error ? <div className="tiny" style={{ color: 'var(--bad)', marginTop: 4 }}>{v.error.slice(0, 60)}</div> : null}
                   </td>
                   <td className="nowrap">{v.duration_seconds ? `${v.duration_seconds.toFixed(1)}s` : '—'}</td>
+                  <td className="nowrap"><GenerationTime timing={v.generation_timing} /></td>
                   <td className="nowrap">{moneyShort(v.cost)}</td>
                   <td className="dim tiny nowrap">{v.created_at ? new Date(v.created_at).toLocaleString() : ''}</td>
                 </tr>

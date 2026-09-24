@@ -4,6 +4,7 @@ import { useStore } from '../store.jsx'
 import MusicEditor from '../components/MusicEditor'
 import { Field, Num, Select, Slider, Text, Toggle, StatePill, Progress, Modal, Empty } from '../components/ui.jsx'
 import PublishActions from '../components/PublishActions'
+import GenerationTime from '../components/GenerationTime'
 
 function Section({ title, children }) {
   return (
@@ -260,6 +261,10 @@ export default function VideoDetail({ videoId, onClose, onOpenVideo }) {
       </div>
       <h1 className="page-title">{video.title || video.topic || 'Untitled video'}</h1>
       <p className="page-sub">{video.channel} · <StatePill state={video.state} /></p>
+      <section className="card" style={{ marginBottom: 16 }}>
+        <div className="row between"><strong>Full generation time</strong><strong><GenerationTime timing={video.generation_timing} /></strong></div>
+        <p className="muted tiny">Submission to finished video, including waiting and retries. Review and publishing time are excluded.</p>
+      </section>
       {displayDone && <section className="card publish-panel"><div><h3>Publishing</h3><p className="muted">Choose a destination for this finished version.</p></div>
         <PublishActions key={activeId} video={{...video,id:activeId}} connection={publishing?.channels.find(c=>c.channel===video.channel)} publications={publishing?.publications} privacy={publishing?.youtube_privacy} disabled={musicDirty} onPublished={async()=>{setPublishing(await api.integrations());load()}}/>
       </section>}

@@ -2,13 +2,27 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {build} from 'esbuild';
 
-const compiled=await build({stdin:{contents:"export {runStage} from './src/stages'; export {GenerationWorkflow} from './src/generation';",resolveDir:process.cwd()},bundle:true,platform:'node',format:'esm',write:false,
+const compiled=await build({stdin:{contents:"export {default as handler} from './src/index'; export {runStage} from './src/stages'; export {GenerationWorkflow} from './src/generation';",resolveDir:process.cwd()},bundle:true,platform:'node',format:'esm',write:false,
   plugins:[{name:'workflow-test-runtime',setup(b){
     b.onResolve({filter:/^cloudflare:workers$/},()=>({path:'stub',namespace:'test'}));
     b.onLoad({filter:/.*/,namespace:'test'},()=>({contents:'export class WorkflowEntrypoint { constructor(ctx,env){this.env=env;this.ctx=ctx;} }',loader:'js'}));
   }}]});
-const {runStage,GenerationWorkflow}=await import('data:text/javascript;base64,'+Buffer.from(compiled.outputFiles[0].text).toString('base64'));
+const {runStage,GenerationWorkflow,handler}=await import('data:text/javascript;base64,'+Buffer.from(compiled.outputFiles[0].text).toString('base64'));
 const step=()=>({do:async(_name:string,...args:any[])=>args.at(-1)(),sleep:async()=>{},waitForEvent:async()=>({payload:{ok:true,value:{url:'https://res.cloudinary.com/test/image/upload/a.png',sha256:'a'.repeat(64)}}})});
+
+test('dashboard routes require admin authentication and retain explicit CORS',async()=>{
+  const env={ADMIN_TOKEN:'fake',ENABLE_MEDIA_PILOT:'true',CORS_ORIGINS:'http://localhost:5173'};
+  const r=await handler.fetch(new Request('https://worker.test/api/videos',{headers:{Origin:'https://unknown.test'}}),env);
+  assert.equal(r.status,401);assert.equal(r.headers.get('Access-Control-Allow-Origin'),null);
+  const good=await handler.fetch(new Request('https://worker.test/api/health',{headers:{Authorization:'Bearer fake',Origin:'http://localhost:5173'}}),env);
+  assert.equal(good.status,200);assert.equal(good.headers.get('Access-Control-Allow-Origin'),'http://localhost:5173');
+  assert.equal((await good.json()).production_ready,false);
+});
+test('frontend generation refuses publishing and unsupported options before any job',async()=>{
+  const env={ADMIN_TOKEN:'fake',ENABLE_MEDIA_PILOT:'true',CORS_ORIGINS:''};
+  const r=await handler.fetch(new Request('https://worker.test/api/channels/lorehush/run',{method:'POST',headers:{Authorization:'Bearer fake','Content-Type':'application/json'},body:JSON.stringify({review_required:false})}),env);
+  assert.equal(r.status,422);
+});
 
 test('stage completion uses an event, not binding-status polling',async()=>{
   let creates=0;
