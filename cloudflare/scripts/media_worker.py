@@ -83,15 +83,33 @@ def prepare_script_bundle(manifest, root):
         if ratio<float(manifest['settings']['align'].get('min_match_ratio',.55)):
             raise ValueError('Narration/script mismatch; refusing unrelated images or captions')
         reference=monotonic(reference,total)
-        captions=measured_captions(heard,total)
+        phrase_mode = manifest.get('caption_mode') == 'translated_phrase'
+        if phrase_mode:
+            # Translation happens in Workflow, never in the CPU-only worker. Original
+            # language words remain the alignment source for scene/audio timing.
+            captions = [dict(w) for w in manifest.get('captions', [])]
+            if not captions:
+                raise ValueError('Measured English caption phrases required')
+            previous_end = 0.0
+            for phrase in captions:
+                start, end = float(phrase['start']), float(phrase['end'])
+                import math
+                if (not all(math.isfinite(n) for n in (start, end)) or start < previous_end - .05
+                        or start < 0 or end <= start or end > total + .05
+                        or not isinstance(phrase.get('word'), str) or not phrase['word'].strip()):
+                    raise ValueError('Invalid translated caption timing')
+                previous_end = end
+            captions = monotonic(captions, total)
+        else:
+            captions=measured_captions(heard,total)
         spans,kept=beat_spans(reference,[len(b.narration.split()) for b in script.beats],total)
         transitions=[plan.transitions[i].normalised().model_dump() for i in kept]
         timeline=build_timeline(spans,transitions,30,total)
         _,pitches=analyze_audio(audio,root)
         emphasis={normalized(w) for b in script.beats for w in b.emphasis_words}
-        stats=write_ass(captions,pitches,emphasis,root/'captions.ass',total)
+        stats=write_ass(captions,pitches,emphasis,root/'captions.ass',total,phrase_mode=phrase_mode)
         timing_report(root/'caption-timing.json',{'reference':reference,'captions':captions,'match_ratio':ratio,
-            'source':'groq:whisper-large-v3-turbo','caption_source':'groq:whisper-large-v3-turbo:verbatim',
+            'source':'groq:whisper-large-v3-turbo','caption_source':'groq:translated-measured-phrases' if phrase_mode else 'groq:whisper-large-v3-turbo:verbatim',
             'heard_words':len(heard),'speech_window':[first,last]},spans,pitches,stats)
         return {**manifest,'operation':'assemble','images':[manifest['images'][i] for i in kept],
             'transitions':transitions,'timeline':asdict(timeline)}
@@ -171,6 +189,9 @@ def main():
             with measure() as metrics:
                 info = execute_media(manifest, root, output)
             metrics.update(info)
+            # Re-editing verifies immutable downloaded narration/final video just like images.
+            with output.open('rb') as checksum_source:
+                metrics['sha256'] = hashlib.file_digest(checksum_source, 'sha256').hexdigest()
             for attempt in range(3):
                 capability = api('upload')
                 try:

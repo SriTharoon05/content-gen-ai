@@ -1,6 +1,6 @@
 import {WorkflowEntrypoint,type WorkflowEvent,type WorkflowStep} from 'cloudflare:workers';
 import {generation,createTask,loadTask,expire,triggered} from './db';
-import {config,textModel,embedding,geminiSpeech,groqSpeech,transcribe,image,upload} from './providers';
+import {config,textModel,embedding,geminiSpeech,groqSpeech,transcribe,image,upload,generationProfile,englishCaptions} from './providers';
 import {digest,validateManifest} from './storage';
 import {validateSchema,validateScript} from './generation';
 import contract from './contract.json';
@@ -28,6 +28,7 @@ function context(c:any) {
   const channel=c.channel;
   return `CHANNEL:${channel.name}. NICHE:${channel.niche}\nOWNER INSTRUCTIONS:${channel.strategy_json?.instructions??(contract.skills as any)['brand/'+channel.slug+'.md']??''}
 STRATEGY:${JSON.stringify(channel.strategy_json)}\nOPTIONS:${JSON.stringify(channel.overrides_json)}
+REQUESTED TOPIC:${JSON.stringify(c.options?.topic||'Choose an original topic within the niche')}
 Original model-generated content. External fact checking disabled. Do not invent studies, current news, statistics or real-person quotes. Clearly frame fiction/speculation.
 PRIOR CONCEPTS:${JSON.stringify(c.prior.slice(0,30))}`;
 }
@@ -61,8 +62,11 @@ export class GenerationStageWorkflow extends WorkflowEntrypoint<Env,StageParams>
         catch(e){try{await(await this.env.MEDIA_WORKFLOW.get(tid)).status();}catch{throw e;}}
         value=tid;
       } else if(op==='audio-ready'){
+        if(/^[a-f0-9]{64}$/.test(data.metrics?.sha256||''))value={...data,sha256:data.metrics.sha256};
+        else {
         const r=await fetch(data.url);if(!r.ok)throw new Error('Prepared audio missing');
         const bytes=await r.arrayBuffer();value={...data,sha256:Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),x=>x.toString(16).padStart(2,'0')).join('')};
+        }
       } else if(op==='checkpoint'){
         value=await upload(this.env,new TextEncoder().encode(JSON.stringify(data)),'checkpoint','json','application/json');
       } else {
@@ -71,12 +75,12 @@ export class GenerationStageWorkflow extends WorkflowEntrypoint<Env,StageParams>
           const schema=(contract.schemas as any)[data.schema];
           if(data.schema==='Script') {
             value=await scriptWithRepair(c,context(c)+'\n'+data.prompt,schema,
-              state.steps[name+'-validation'],textModel,validateScript,
+              state.steps[name+'-validation'],textModel,s=>validateScript(s,generationProfile(c)),
               value=>generation(this.env,'save',id,{key:name+'-validation',value}));
           } else {
             value=await textModel(c,context(c)+'\n'+data.prompt,schema);validateSchema(value,schema);
           }
-          if(data.schema==='VoiceDirection'&&value.multi_speaker)throw new Error('Single narrator required');
+          if(data.schema==='VoiceDirection'&&value.multi_speaker!==generationProfile(c).conversation)throw new Error('Voice configuration differs from channel');
           if(['VisualPlan','EditPlan'].includes(data.schema)){
             const expected=state.steps.script.beats.map((x:any)=>x.shot_id).join();
             const actual=(value.shots||value.transitions).map((x:any)=>x.shot_id).join();
@@ -88,9 +92,28 @@ export class GenerationStageWorkflow extends WorkflowEntrypoint<Env,StageParams>
             const r=await generation(this.env,'reserve',id,{...candidate,embedding:vector});if(!r.collision){value=r;break;}}
           if(!value)throw new Error('All concepts collided; no media spend');
         } else if(op==='gemini-audio'){
-          const a=await geminiSpeech(this.env,c,data.plain,data.direction);value=a?[a]:[];
-        } else if(op==='groq-audio')value=await groqSpeech(this.env,c,data.text);
+          const a=await geminiSpeech(this.env,c,data.plain,data.direction,data.conversation===true);value=a?[a]:[];
+        } else if(op==='groq-audio')value=await groqSpeech(this.env,c,data.text,data.speaker);
         else if(op==='words')value=await transcribe(c,data.url);
+        else if(op==='english-captions')value=await englishCaptions(c,data.words);
+        else if(op==='profile')value=generationProfile(c);
+        else if(op==='default-bgm'){
+          const {options}=generationProfile(c);
+          const track=c.music_track;
+          if(!track||options.music_enabled===false)value={music:null,intensity:0,ducking:options.ducking??c.settings.music.ducking??true};
+          else {
+            if(!track.rights_cleared||track.archived)throw new Error('Default music must be active and rights cleared');
+            const pct=Number(options.music_volume_pct??track.default_volume_pct??c.settings.music.default_volume_pct??20);
+            if(!Number.isFinite(pct)||pct<0||pct>100)throw new Error('Music intensity must be 0–100%');
+            // Browser registration hashes legacy/new music once; CircleCI verifies
+            // bytes. Never hash an entire music file inside a 10ms Worker step.
+            const {allowedMediaUrl}=await import('./storage');
+            const url=allowedMediaUrl(track.path,this.env);
+            const sha256=track.sha256;
+            if(!/^[a-f0-9]{64}$/.test(sha256||''))throw new Error('Register the default music checksum in the Music library before generation');
+            value={asset:{url,sha256},music:track,intensity:Math.min(.5,Math.max(0,Number(c.settings.music.max_intensity??.25)))*pct/100,ducking:options.ducking??c.settings.music.ducking??true,music_start:track.trim_start||0,music_end:track.trim_end??null};
+          }
+        }
         else if(op==='image')value=await image(this.env,id,name,c,data.prompt);
         else if(op==='settings'){
           const s=c.settings;value={video:{...s.video,width:720,height:1280,fps:30},music:s.music,align:s.align,runtime:{ffmpeg_path:'ffmpeg',ffprobe_path:'ffprobe',low_memory_render:true}};

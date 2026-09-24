@@ -1,0 +1,28 @@
+.cf-workspace { max-width: 1440px; margin: 0 auto; width: 100%; }
+.cf-workspace .workspace-header { margin-bottom: 20px; }
+.cf-workspace .workspace-header strong { font-size: 24px; letter-spacing: -.5px; }
+.cf-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin: 20px 0 24px; }
+.cf-panel { margin-bottom: 20px; }
+.cf-panel > .card { margin-bottom: 20px; }
+.cf-workspace .card h3 { font-size: 18px; font-weight: 700; }
+.cf-workspace .lbl { font-size: 15px; font-weight: 650; }
+.cf-workspace input, .cf-workspace select, .cf-workspace textarea { font-size: 15px; color: var(--text); }
+.cf-workspace textarea { min-height: 120px; line-height: 1.65; }
+.cf-workspace .channel-direction-panel textarea { min-height: 230px; }
+.cf-workspace input[readonly], .cf-workspace textarea[readonly] { background: var(--panel-2); }
+.cf-workspace .muted { color: var(--muted); font-size: 14px; }
+.cf-workspace .note { overflow-wrap: anywhere; }
+.cf-workspace .note.err { border-color: var(--bad); }
+.cf-fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.cf-fieldset:disabled { opacity: .75; }
+.cf-toolbar { margin-bottom: 20px; flex-wrap: wrap; }
+.cf-actions { align-items: end; flex-wrap: wrap; }
+.cf-video { max-height: 640px; max-width: 100%; display: block; border-radius: 14px; background: #10272b; }
+.cf-copy { margin-top: 20px; }
+.cf-copy p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.cf-track { padding: 16px 0; border-top: 1px solid var(--line); }
+.cf-workspace audio { width: 100%; max-width: 100%; }
+.cf-key { padding: 14px; border: 1px solid var(--line); border-radius: 12px; }
+.cf-key .btn { margin-top: 10px; }
+.cf-key textarea { -webkit-text-security: disc; }
+@media(max-width:760px) { .cf-workspace .workspace-header { align-items: flex-start; flex-direction: column; gap: 12px; } .cf-tabs .btn { flex: 1 1 140px; } }

@@ -225,7 +225,7 @@ def health() -> dict:
 
 @app.get("/health")
 def lightweight_health():
-    return {"ok": True}
+    return {"ok": True, "scheduler_owner_guard": True}
 
 
 @app.post("/api/schedule/tick")

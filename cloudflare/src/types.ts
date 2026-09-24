@@ -13,7 +13,18 @@ export interface Env {
   CIRCLECI_BRANCH: string;
   CORS_ORIGINS: string;
   ENABLE_MEDIA_PILOT: string;
-  MEDIA_WORKFLOW: Workflow<{taskId: string;notifyGeneration?:string}>;
+  RENDER_API_ORIGIN?: string;
+  GOOGLE_CLIENT_ID: string;
+  GOOGLE_CLIENT_SECRET: string;
+  GOOGLE_REDIRECT_URI: string;
+  META_APP_ID: string;
+  META_APP_SECRET: string;
+  META_REDIRECT_URI: string;
+  META_API_VERSION: string;
+  OAUTH_ENCRYPTION_KEY?: string;
+  PUBLISH_WORKFLOW: Workflow<{publicationId:string;segment?:number}>;
+  EDITING_WORKFLOW: Workflow<import('./editing').EditParams>;
+  MEDIA_WORKFLOW: Workflow<{taskId: string;notifyGeneration?:string;notifyEditing?:string}>;
   GENERATION_WORKFLOW: Workflow<{videoId: string;segment?:number;runKey?:string}>;
   GENERATION_STAGE: Workflow<import('./stages').StageParams>;
 }

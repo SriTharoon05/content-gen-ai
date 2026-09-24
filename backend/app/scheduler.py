@@ -38,6 +38,9 @@ def plan_batch(videos_per_channel=None, channels=None, scheduled_date=None):
     queued, skipped = [], []
     with session_scope() as session:
         session.execute(text("SELECT pg_advisory_xact_lock(hashtext('story-shorts:schedule'))"))
+        owner = session.get(AppSetting, 'backend_control')
+        if scheduled_date and owner and owner.value_json.get('scheduler_owner', 'render') != 'render':
+            return {'queued': 0, 'videos': [], 'scheduler_owner': 'cloudflare'}
         if scheduled_date and session.get(ScheduleRun, scheduled_date):
             return {"queued": 0, "videos": [], "already_queued": True, "skipped_channels": []}
         rows = session.scalars(select(Channel).where(Channel.enabled.is_(True)).order_by(Channel.slug)).all()

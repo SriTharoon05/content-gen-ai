@@ -3,8 +3,8 @@ import type {Env} from './types';
 import {triggerFailed,expire,loadTask} from './db';
 import {runStage} from './stages';
 
-export class MediaWorkflow extends WorkflowEntrypoint<Env, {taskId: string;notifyGeneration?:string}> {
-  async run(event: WorkflowEvent<{taskId: string;notifyGeneration?:string}>, step: WorkflowStep) {
+export class MediaWorkflow extends WorkflowEntrypoint<Env, {taskId: string;notifyGeneration?:string;notifyEditing?:string}> {
+  async run(event: WorkflowEvent<{taskId: string;notifyGeneration?:string;notifyEditing?:string}>, step: WorkflowStep) {
     const id = event.payload.taskId;
     // Durable events wake immediately; ten-minute DB checks recover a lost callback.
     // No media bytes or credentials are stored in Workflow step results.
@@ -12,6 +12,9 @@ export class MediaWorkflow extends WorkflowEntrypoint<Env, {taskId: string;notif
       const inspected=await runStage(this.env,step,`${id}-inspect-${round}`,{videoId:id,name:`inspect-${round}`,op:'media-inspect',data:{},retries:2,parentId:event.instanceId,parentKind:'media'});
       const status=inspected.status;
       if (status === 'succeeded' || status === 'failed') {
+        if(event.payload.notifyEditing)await step.do('notify-editing',async()=>{
+          await(await this.env.EDITING_WORKFLOW.get(event.payload.notifyEditing!)).sendEvent({type:'render-'+id,payload:{taskId:id,status}});
+        });
         if(event.payload.notifyGeneration)await step.do('notify-generation',async()=>{
           await(await this.env.GENERATION_WORKFLOW.get(event.payload.notifyGeneration!)).sendEvent({type:'render-'+id,payload:{taskId:id,status}});
         });

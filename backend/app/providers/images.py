@@ -13,11 +13,11 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 
 import httpx
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 from ..db import session_scope
 from ..key_pool import is_auth_error, is_rate_limited, pool
-from ..models import ProviderCall
+from ..models import AppSetting, ProviderCall
 from ..settings_store import cfg, credits_per_image, image_requests_per_minute
 
 
@@ -93,19 +93,27 @@ def _reserve(video_id: str, key: str, model: str) -> tuple[str, str, float]:
     usd = per_image * float(cfg("pricing", "credit_price_usd", default=1.185))
     call_id = hashlib.sha256(key.encode()).hexdigest()[:32]
     with session_scope() as session:
+        # Same reservation lock as Cloudflare: running both backends must not
+        # allocate the same remaining provider balance concurrently.
+        session.execute(text("SELECT pg_advisory_xact_lock(hashtext('story-shorts:provider-credit-budget'))"))
+        runtime = session.get(AppSetting, 'runtime')
+        balance = float((runtime.value_json if runtime else {}).get('pricing', {}).get('credit_balance', cfg('pricing', 'credit_balance', default=0)))
+        used = float(session.scalar(select(func.coalesce(func.sum(ProviderCall.credits), 0.0)).where(
+            ProviderCall.status.in_(['settled', 'reserved', 'uncertain']))) or 0)
+        available = max(0, balance - used)
         existing = session.get(ProviderCall, call_id)
         if existing:
             if existing.status == 'failed':
-                if remaining_credits() < per_image:
+                if available < per_image:
                     raise CreditExhausted('Insufficient credits to retry this image')
                 existing.status = 'reserved'
                 existing.credits = per_image
                 existing.usd = round(usd, 8)
                 existing.units = 1
             return call_id, existing.status, existing.credits
-        if remaining_credits() < per_image:
+        if available < per_image:
             raise CreditExhausted(
-                f"Only {remaining_credits():.4f} credits remain and one image on {model} costs {per_image}"
+                f"Only {available:.4f} credits remain and one image on {model} costs {per_image}"
             )
         session.add(
             ProviderCall(

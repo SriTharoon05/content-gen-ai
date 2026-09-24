@@ -14,6 +14,25 @@ spec.loader.exec_module(worker)
 
 
 class MediaTests(unittest.TestCase):
+    def test_translated_phrases_keep_source_alignment_and_use_phrase_ass(self):
+        from app.settings_store import DEFAULTS
+        beats=[{'shot_id':f's{i:03}','narration':'An original measured sentence for this scene.','emphasis_words':[]} for i in range(1,21)]
+        words=' '.join(b['narration'] for b in beats).split()
+        heard=[{'word':w,'start':.12+i*.4,'end':.12+i*.4+.3} for i,w in enumerate(words)]
+        phrases=[{'word':'An English translation, not newly timed words.','start':.12,'end':3.0}]
+        manifest={'version':1,'operation':'assemble_script','settings':DEFAULTS,'language':'ta','caption_mode':'translated_phrase',
+            'captions':phrases,'script':{'hook_kind':'question','hook':beats[0]['narration'],'beats':beats},'words':heard,
+            'images':[f'images/{b["shot_id"]}.png' for b in beats],
+            'transitions':[{'shot_id':b['shot_id'],'kind':'zoom_out','duration_ms':300} for b in beats]}
+        with tempfile.TemporaryDirectory() as folder, patch('app.audio.probe_duration',return_value=60),patch('app.audio.speech_window',return_value=(.12,59.8)),patch('app.captions.analyze_audio',return_value=([],[])),patch('app.captions.write_ass',return_value={'dialogue_lines':1}) as ass:
+            result=worker.prepare_script_bundle(manifest,Path(folder))
+            self.assertEqual(result['timeline']['total_frames'],1800)
+            self.assertEqual(ass.call_args.kwargs['phrase_mode'],True)
+            self.assertEqual(ass.call_args.args[0][0]['word'],phrases[0]['word'])
+            manifest['captions'][0]['end']=80
+            with self.assertRaisesRegex(ValueError,'caption timing'):
+                worker.prepare_script_bundle(manifest,Path(folder))
+
     def test_fresh_bundle_uses_measured_words_and_canonical_timeline(self):
         import json
         from app.settings_store import DEFAULTS

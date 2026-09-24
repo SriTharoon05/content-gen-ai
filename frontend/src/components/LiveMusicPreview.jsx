@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { mediaUrl } from '../api'
 
 // Decoded audio and the live mix stay in the browser; the backend serves saved assets only.
-export default function LiveMusicPreview({video,track,form,ceiling}) {
+export default function LiveMusicPreview({video,track,form,ceiling,urls}) {
   const player=useRef(null), mixer=useRef(null), current=useRef({form,ceiling})
   current.current={form,ceiling}
   const [ready,setReady]=useState(false), [loading,setLoading]=useState(false), [error,setError]=useState('')
@@ -13,7 +13,7 @@ export default function LiveMusicPreview({video,track,form,ceiling}) {
     m.sources=[];cancelAnimationFrame(m.frame)
   }
   const dispose=()=>{stop();const m=mixer.current;mixer.current=null;if(m)m.ctx.close().catch(()=>{});setReady(false)}
-  useEffect(()=>{player.current?.pause();dispose();setError('');return dispose},[video.id,video.output_revision,track?.id])
+  useEffect(()=>{player.current?.pause();dispose();setError('');return dispose},[video.id,video.output_revision,track?.id,urls?.narration,urls?.music,urls?.video])
   const start=()=>{
     stop();const m=mixer.current,v=player.current;if(!m||!v||v.paused)return
     m.ctx.resume().catch(()=>{})
@@ -60,7 +60,7 @@ export default function LiveMusicPreview({video,track,form,ceiling}) {
     try{
       await ctx.resume()
       const decode=async url=>{const r=await fetch(url);if(!r.ok)throw Error('Saved audio is unavailable for live preview');return ctx.decodeAudioData(await r.arrayBuffer())}
-      const [voice,bed]=await Promise.all([decode(mediaUrl.narration(video.id)),track?decode(mediaUrl.music(track.id)):Promise.resolve(null)])
+      const [voice,bed]=await Promise.all([decode(urls?.narration || mediaUrl.narration(video.id)),track?decode(urls?.music || mediaUrl.music(track.id)):Promise.resolve(null)])
       if(mixer.current!==m)return
       m.voice=voice;m.bed=bed;m.gain=ctx.createGain();m.gain.gain.value=0
       m.analyser=ctx.createAnalyser();m.analyser.fftSize=1024
@@ -78,7 +78,7 @@ export default function LiveMusicPreview({video,track,form,ceiling}) {
     {ready && <div><p className="dim tiny">Live draft only. Apply once when satisfied to save this soundtrack into the upload file.</p>
       <button className="btn" onClick={()=>{if(player.current.paused)player.current.play().catch(e=>setError(e.message));else player.current.pause()}}>{playing?'Pause live mix':'Play live mix'}</button><br/>
       <video ref={player} muted playsInline controls preload="metadata" style={{maxWidth:300,width:'100%',marginTop:12,borderRadius:10}}
-        src={`${mediaUrl.video(video.id)}?revision=${encodeURIComponent(video.output_revision||'')}`}
+        src={urls?.video || `${mediaUrl.video(video.id)}?revision=${encodeURIComponent(video.output_revision||'')}`}
         onPlaying={()=>{setPlaying(true);start()}} onPause={()=>{setPlaying(false);stop()}} onWaiting={stop} onSeeking={stop} onSeeked={start} onRateChange={start} onEnded={()=>{setPlaying(false);stop()}}
         onVolumeChange={e=>{if(!e.currentTarget.muted)e.currentTarget.muted=true}} />
     </div>}

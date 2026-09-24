@@ -7,10 +7,15 @@
   "workers_dev": true,
   "vars": {
     "ENABLE_MEDIA_PILOT": "true",
+    "RENDER_API_ORIGIN": "https://story-shorts-api.onrender.com",
+    "GOOGLE_REDIRECT_URI": "https://story-shorts-cloudflare-pilot.storyshort.workers.dev/auth/google/callback",
+    "META_REDIRECT_URI": "https://story-shorts-cloudflare-pilot.storyshort.workers.dev/auth/meta/callback",
+    "META_API_VERSION": "v25.0",
     "CIRCLECI_BRANCH": "codex/cloudflare-fresh-generation",
     "CLOUDINARY_PREFIX": "story-shorts-cloudflare",
     "CORS_ORIGINS": "http://localhost:5173,http://127.0.0.1:5173"
   },
+  "triggers": {"crons": ["* * * * *"]},
     "observability": {
     "logs": {
       "enabled": true,
@@ -27,6 +32,8 @@
   "workflows": [
     {"name": "story-shorts-media-pilot", "binding": "MEDIA_WORKFLOW", "class_name": "MediaWorkflow"},
     {"name": "story-shorts-generation-pilot", "binding": "GENERATION_WORKFLOW", "class_name": "GenerationWorkflow"},
-    {"name": "story-shorts-generation-stage", "binding": "GENERATION_STAGE", "class_name": "GenerationStageWorkflow"}
+    {"name": "story-shorts-generation-stage", "binding": "GENERATION_STAGE", "class_name": "GenerationStageWorkflow"},
+    {"name": "story-shorts-editing", "binding": "EDITING_WORKFLOW", "class_name": "EditingWorkflow"},
+    {"name": "story-shorts-publishing", "binding": "PUBLISH_WORKFLOW", "class_name": "PublishingWorkflow"}
   ]
 }
