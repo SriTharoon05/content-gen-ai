@@ -1,4 +1,9 @@
 -- Additive, review-only generation pilot. No production scheduler or publishing mutations.
+CREATE TABLE IF NOT EXISTS public.cf_image_rate (
+  model text PRIMARY KEY, next_at timestamptz NOT NULL
+);
+ALTER TABLE public.cf_image_rate ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.cf_image_rate FROM PUBLIC,anon,authenticated;
 CREATE OR REPLACE FUNCTION public.cf_generation(p_action text,p_task_id text,p_payload jsonb DEFAULT '{}'::jsonb)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public,extensions,pg_temp AS $$
 DECLARE v public.videos%ROWTYPE; c public.channels%ROWTYPE; existing public.content_ledger%ROWTYPE;
@@ -58,6 +63,17 @@ BEGIN
     INSERT INTO public.content_ledger(id,video_id,core_entity,content_angle,core_concept,status,embedding,created_at)
     VALUES(gen_random_uuid(),p_task_id,entity,angle,p_payload->>'core_concept','active',vec,now()) RETURNING * INTO existing;
     RETURN to_jsonb(existing)-'embedding';
+  ELSIF p_action='image_permit' THEN
+    k:=p_payload->>'model';
+    PERFORM pg_advisory_xact_lock(hashtext('cf-image-rate:'||k));
+    INSERT INTO public.cf_image_rate(model,next_at) VALUES(k,clock_timestamp()) ON CONFLICT DO NOTHING;
+    SELECT jsonb_build_object('wait_ms',greatest(0,ceil(extract(epoch FROM (next_at-clock_timestamp()))*1000)))
+      INTO data FROM public.cf_image_rate WHERE model=k;
+    IF (data->>'wait_ms')::integer>0 THEN RETURN data; END IF;
+    UPDATE public.cf_image_rate SET next_at=clock_timestamp()+
+      CASE WHEN k='lykon/dreamshaper-8-lcm' THEN interval '220 milliseconds' ELSE interval '1100 milliseconds' END
+      WHERE model=k;
+    RETURN '{"wait_ms":0}'::jsonb;
   ELSIF p_action='call_start' THEN
     k:=p_payload->>'key';
     SELECT to_jsonb(pc) INTO data FROM public.provider_calls pc WHERE idempotency_key='cf:'||p_task_id||':'||k;

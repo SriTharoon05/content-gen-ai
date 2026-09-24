@@ -56,6 +56,14 @@ def main():
                 assert gen('create',fresh,{'channel':'curionerve'})['status']==409
                 assert gen('status',fresh)['state']=='CF_GENERATING'
                 assert gen('config',fresh)['channel']['slug']=='lorehush'
+                other=uuid.uuid4().hex
+                assert gen('create',other,{'channel':'lorehush'})['id']==other
+                rate_model='rate-fixture-'+fresh
+                assert gen('image_permit',fresh,{'model':rate_model})['wait_ms']==0
+                assert gen('image_permit',other,{'model':rate_model})['wait_ms']>0
+                assert gen('image_permit',other,{'model':rate_model+'-independent'})['wait_ms']==0
+                for role in ('anon','authenticated'):
+                    assert not connection.execute(text("SELECT has_table_privilege(:r,'public.cf_image_rate','SELECT')"),{'r':role}).scalar()
                 assert gen('save',fresh,{'key':'fixture','value':{'ok':True}})['ok']
                 assert gen('status',fresh)['steps']['fixture']['ok']
                 concept={'core_entity':'cf-fixture-'+fresh,'content_angle':'test-angle','core_concept':'Test fixture is rolled back, never used for generation.', 'embedding':json.dumps([1.0]+[0.0]*767)}

@@ -35,7 +35,15 @@ test('coordinator checkpoints exactly eight new stages then continues durably',a
     GENERATION_WORKFLOW:{create:async(p:any)=>{continuations.push(p);}},
     MEDIA_WORKFLOW:{get:async()=>({status:async()=>({status:'complete'})})}};
   try {
-    const result=await new GenerationWorkflow({},env).run({instanceId:'fixture-run',payload:{videoId:'a'.repeat(32)}},step());
+    let active=0,peak=0;
+    const runner=step();const wait=runner.waitForEvent;
+    runner.waitForEvent=async()=>{
+      active++;peak=Math.max(peak,active);
+      await new Promise(resolve=>setTimeout(resolve,10));
+      try{return await wait();}finally{active--;}
+    };
+    const result=await new GenerationWorkflow({},env).run({instanceId:'fixture-run',payload:{videoId:'a'.repeat(32)}},runner);
+    assert.equal(peak,3);assert.equal(active,0);
     assert.equal(result.status,'continued');assert.equal(children.length,8);assert.equal(continuations.length,1);
     assert.equal(continuations[0].params.segment,1);assert.ok(external<10);
     assert.ok(children.every(c=>c.params.op==='image'));

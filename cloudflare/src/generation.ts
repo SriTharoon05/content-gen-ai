@@ -54,8 +54,8 @@ export class GenerationWorkflow extends WorkflowEntrypoint<Env,{videoId:string;s
         });
         throw new Continued();
       }
-      const value=await runStage(this.env,step,`${event.instanceId}-${name}`,{videoId:id,name,op,data,retries,parentId:event.instanceId,parentKind:'generation'});
-      completed++;return value;
+      completed++;
+      return runStage(this.env,step,`${event.instanceId}-${name}`,{videoId:id,name,op,data,retries,parentId:event.instanceId,parentKind:'generation'});
     };
     const model=async(name:string,schemaName:keyof typeof contract.schemas,prompt:()=>string,check?:(x:any)=>void)=>{
       const value=await checkpoint(name,'model',{schema:schemaName,prompt:prompt()});check?.(value);return value;
@@ -117,14 +117,19 @@ Write 20–25 sequential visual beats, up to 30 only if context needs them. shot
         if(e.transitions.every((s:any)=>['hard_cut','match_cut'].includes(s.kind)))throw new Error('Missing contextual blend transitions');
       });
       const files:Manifest['files']={'narration.wav':{url:audio.url,sha256:audio.sha256}};const images:string[]=[];
-      for(const shot of visuals.shots){
-        // Serial requests + >=2 seconds also fit 60 RPM; no burst per provider key.
-        if(!Object.prototype.hasOwnProperty.call(initial.steps,'image-'+shot.shot_id)&&completed<8)
-          await step.sleep('image-rate-'+shot.shot_id,'2 seconds');
-        // Retries read the DB checkpoint/settled ledger before making any new purchase.
-        // An uncertain reservation still fails closed; a post-save platform failure can recover.
-        const a=await checkpoint('image-'+shot.shot_id,'image',{prompt:shot.image_prompt+'\n'+visuals.style_block},2);
-        const name='images/'+shot.shot_id+'.png';files[name]=a;images.push(name);
+      for(let i=0;i<visuals.shots.length;){
+        const capacity=Math.max(1,Math.min(3,8-completed));
+        const batch=visuals.shots.slice(i,i+capacity);
+        // Drain the whole batch before continuation or failure: never abandon paid siblings.
+        const outcomes=await Promise.allSettled(batch.map(async(shot:any)=>{
+          const asset=await checkpoint('image-'+shot.shot_id,'image',{prompt:shot.image_prompt+'\n'+visuals.style_block},2);
+          return {name:'images/'+shot.shot_id+'.png',asset};
+        }));
+        for(const result of outcomes){
+          if(result.status==='rejected')throw result.reason;
+          files[result.value.name]=result.value.asset;images.push(result.value.name);
+        }
+        i+=batch.length;
       }
       await model('copy','PublishCopy',()=>`${skill('image_and_publishing')}\nWrite accurate engaging YouTube title/description and separate Instagram caption with relevant hashtags, never promise virality. Script:${JSON.stringify(script)}`);
       const manifest:Manifest={version:1,operation:'assemble_script',files,images,settings,script,words,transitions:edit.transitions,intensity:0,ducking:true,music:null};

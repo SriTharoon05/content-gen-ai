@@ -128,7 +128,16 @@ export async function image(env:Env,id:string,stage:string,c:any,prompt:string) 
   const reservation=await generation(env,'call_start',id,{key:stage,provider:'pollinations',model,credits:item.credits});
   if(reservation.status==='settled')return reservation.detail_json;
   if(!reservation.new)throw new Error('Image call outcome uncertain; refusing a duplicate charge');
+  let permitChecks=0;
   for(const key of c.settings.keys?.pollinations||[]) {
+    // Shared across all pilot videos/keys for this model, not a per-channel RPM limit.
+    // Waiting yields the event loop; each child holds at most one image in memory.
+    for(;;){
+      if(permitChecks++>=12)throw new Error('Image rate gate busy; no additional purchase attempted');
+      const permit=await generation(env,'image_permit',id,{model});
+      if(!permit.wait_ms)break;
+      await new Promise(resolve=>setTimeout(resolve,Math.min(2000,permit.wait_ms+50)));
+    }
     // A timeout or 5xx may have consumed credits: fail closed, no automatic re-billing.
     const r=await request(c.settings.models.image_endpoint,key,{model,prompt,size:c.settings.models.image_size,n:1,response_format:'url'});
     if([401,403,429].includes(r.status)){await r.body?.cancel();continue;}

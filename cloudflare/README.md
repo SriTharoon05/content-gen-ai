@@ -236,6 +236,16 @@ The current pilot does not proxy unimplemented routes to Render or silently run 
 
 ## Free-tier gate
 
+Image stages run in batches of up to three isolated child Workflows per video.
+Batches drain before the eight-stage continuation boundary or failure handling.
+The Supabase `cf_image_rate` gate shares request pacing across all pilot videos and
+keys per model: 1.1 seconds between starts for FLUX/Z-Image (below 60 RPM), and
+0.22 seconds for DreamShaper (below 300 RPM). Existing Render requests do not use
+this pilot gate: do not assume it coordinates a simultaneous Render workload.
+This is bounded parallel network I/O, not image processing inside Workers.
+Rate contention and uncertain purchases still fail closed after bounded attempts.
+No new live speed or CPU benchmark has been performed for this change.
+
 Cloudflare Free has a small CPU allowance and a 3,000 Workflow steps/day allowance;
 measure real deployed CPU before deciding whether it fits. Dry-run bundling cannot
 prove free-tier CPU compliance. No paid subscription is activated by these files.
