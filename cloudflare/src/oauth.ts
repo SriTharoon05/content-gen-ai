@@ -9,7 +9,14 @@ export interface PublishingEnv extends Env {
  PUBLISH_WORKFLOW:Workflow<{publicationId:string;segment?:number}>;
 }
 export const publishRpc=(env:Env,action:string,id='',payload:Record<string,any>={})=>rpc(env,action,id,payload,'cf_publish');
-export const socialFetch=(input:string,init:RequestInit={})=>fetch(input,{redirect:'error',...init,signal:AbortSignal.timeout(45000)});
+export async function socialFetch(input:string,init:RequestInit={}) {
+ // Workers supports manual/follow, not the browser-only error redirect mode.
+ // Reject redirects ourselves so provider credentials never follow a new host.
+ const response=await fetch(input,{...init,redirect:'manual',signal:AbortSignal.timeout(45000)});
+ // YouTube uses 308 without Location for resumable-upload acknowledgement.
+ if(response.status>=300&&response.status<400&&response.headers.has('Location'))throw new ApiError(502,'Unexpected social provider redirect');
+ return response;
+}
 const scopes=['https://www.googleapis.com/auth/youtube.upload','https://www.googleapis.com/auth/youtube.readonly','https://www.googleapis.com/auth/yt-analytics.readonly'];
 const igScopes=['instagram_business_basic','instagram_business_content_publish','instagram_business_manage_insights'];
 export async function checked(response:Response) {
@@ -18,6 +25,10 @@ export async function checked(response:Response) {
  return body;
 }
 export async function key(env:PublishingEnv,provider:'google'|'meta') {return fernetKey(env.OAUTH_ENCRYPTION_KEY,provider==='google'?env.GOOGLE_CLIENT_SECRET:env.META_APP_SECRET,provider);}
+async function storedCredential(env:PublishingEnv,provider:'google'|'meta',value:string){
+ try{return await decrypt(value,await key(env,provider));}
+ catch{throw new ApiError(409,`${provider} stored connection cannot be decrypted; use the original OAuth secret/encryption key or reconnect`);}
+}
 function config(env:PublishingEnv,provider:'google'|'meta') {
  const google=provider==='google';const id=google?env.GOOGLE_CLIENT_ID:env.META_APP_ID,secret=google?env.GOOGLE_CLIENT_SECRET:env.META_APP_SECRET;
  if(!id||!secret)throw new ApiError(409,`Configure ${provider} OAuth credentials first`);
@@ -29,13 +40,13 @@ export async function accessToken(env:PublishingEnv,slug:string,platform:'youtub
  const rows=await publishRpc(env,'credentials',slug);
  if(platform==='youtube') {
   if(!rows.youtube?.refresh_token_encrypted)throw new ApiError(409,'Connect YouTube first');
-  const refresh=await decrypt(rows.youtube.refresh_token_encrypted,await key(env,'google'));
+  const refresh=await storedCredential(env,'google',rows.youtube.refresh_token_encrypted);
   const result=await checked(await socialFetch('https://oauth2.googleapis.com/token',{method:'POST',body:new URLSearchParams({client_id:env.GOOGLE_CLIENT_ID,client_secret:env.GOOGLE_CLIENT_SECRET,refresh_token:refresh,grant_type:'refresh_token'})}));
   return {token:result.access_token as string,account:rows.youtube.remote_channel_id as string};
  }
  const row=rows.instagram;
  if(!row?.token_encrypted||row.login_mode!=='instagram'||Date.parse(row.token_expires_at)<=Date.now())throw new ApiError(409,'Reconnect direct Instagram Login');
- let token=await decrypt(row.token_encrypted,await key(env,'meta'));
+ let token=await storedCredential(env,'meta',row.token_encrypted);
  if(Date.parse(row.token_expires_at)<Date.now()+7*86400000) {
   const result=await checked(await socialFetch('https://graph.instagram.com/refresh_access_token?'+new URLSearchParams({grant_type:'ig_refresh_token',access_token:token})));
   token=result.access_token;

@@ -15,7 +15,7 @@ export async function publishUnit(env:PublishingEnv,id:string):Promise<{status:s
  if(!p.session_url) {
   if(!loaded.fresh){await update(env,id,{status:'uncertain',error:'Upload initialization interrupted; reconcile before retry'});return {status:'uncertain'};}
   if(platform==='youtube') {
-   const head=await fetch(media,{method:'HEAD',redirect:'error'}),size=Number(head.headers.get('Content-Length'));
+   const head=await fetch(media,{method:'HEAD'}),size=Number(head.headers.get('Content-Length'));
    if(!head.ok||!Number.isSafeInteger(size)||size<=0)throw new Error('Media size unavailable');
    const response=await fetch('https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status',{method:'POST',headers:{...headers,'Content-Type':'application/json','X-Upload-Content-Length':String(size),'X-Upload-Content-Type':'video/mp4'},body:JSON.stringify({snippet:{title:copy.title,description:copy.description,tags:copy.tags,categoryId:'27'},status:{privacyStatus:p.requested_privacy,selfDeclaredMadeForKids:!!v.made_for_kids}})});
    if(!response.ok){await checked(response);}
@@ -30,7 +30,7 @@ export async function publishUnit(env:PublishingEnv,id:string):Promise<{status:s
  }
  if(platform==='youtube') {
   const session=uploadUrl(p.session_url);
-  const head=await fetch(media,{method:'HEAD',redirect:'error'}),size=Number(head.headers.get('Content-Length'));
+  const head=await fetch(media,{method:'HEAD'}),size=Number(head.headers.get('Content-Length'));
   if(!head.ok||!Number.isSafeInteger(size)||size<=0)throw new Error('Media size unavailable');
   // Probe first on every replay. An acknowledged final PUT is never uploaded twice.
   const probe=await fetch(session,{method:'PUT',headers:{...headers,'Content-Length':'0','Content-Range':`bytes */${size}`},redirect:'manual'});
@@ -40,7 +40,7 @@ export async function publishUnit(env:PublishingEnv,id:string):Promise<{status:s
   if(acknowledged&&!/^bytes=0-\d+$/.test(acknowledged))throw new Error('Invalid upload acknowledgement');
   const offset=acknowledged?Number(acknowledged.split('-')[1])+1:0,end=Math.min(size-1,offset+CHUNK_BYTES-1);
   if(offset>=size)throw new Error('Final upload acknowledgement pending');
-  const source=await fetch(media,{headers:{Range:`bytes=${offset}-${end}`},redirect:'error'});
+  const source=await fetch(media,{headers:{Range:`bytes=${offset}-${end}`}});
   if(source.status!==206||source.headers.get('Content-Range')!==`bytes ${offset}-${end}/${size}`||!source.body){await source.body?.cancel();throw new Error('Media storage did not honor byte range');}
   // Workers derives Content-Length from FixedLengthStream (manual header alone is ignored).
   const fixed=new FixedLengthStream(end-offset+1);

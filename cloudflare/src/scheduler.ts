@@ -19,7 +19,8 @@ export async function saveSchedule(env:Env,input:any){
     // Only a server-configured origin can attest to the deployed ownership guard.
     const origin=env.RENDER_API_ORIGIN;
     if(!origin)throw new ApiError(409,'Configure RENDER_API_ORIGIN and deploy the Render scheduler guard first');
-    const response=await fetch(new URL('/health',origin),{signal:AbortSignal.timeout(15000),redirect:'error'});
+    const response=await fetch(new URL('/health',origin),{signal:AbortSignal.timeout(15000),redirect:'manual'});
+    if(!response.ok)throw new ApiError(409,'Render scheduler ownership guard is unavailable');
     const health=await response.json() as any;
     if(!response.ok||health.scheduler_owner_guard!==true)throw new ApiError(409,'Render scheduler ownership guard is not deployed');
     await rpc(env,'verify_guard','',{},'cf_schedule');

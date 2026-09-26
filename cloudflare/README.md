@@ -1,30 +1,56 @@
-# Isolated Cloudflare / Cloudinary media migration pilot
+# Native Cloudflare backend / Cloudinary media
 
-**Status: media pilot only, NOT a complete replacement for the Render backend.**
-All source changes are inside `cloudflare/`. The additive pilot database functions
-below must be installed in Supabase. Do not change the frontend API URL, remove
-Render, enable a second production scheduler, or change the existing CircleCI pipeline.
-The runtime is TypeScript Workers/Workflows; native Python/FFmpeg runs only on CircleCI.
+**Status: native implementation present; production readiness remains unverified.**
+The Worker and frontend implement generation, publishing/OAuth, scheduling, editing,
+settings/channel administration and analytics. Implementation is not evidence of a
+completed production cutover. Keep Render available and scheduling ownership on Render
+until the deployment gates below are satisfied. The runtime is TypeScript
+Workers/Workflows; canonical Python/FFmpeg media processing runs on CircleCI.
+See [frontend status](FRONTEND_STATUS.md) for UI coverage and current verification.
+
+## Current verification snapshot (2026-09-27)
+
+- Fresh review-only run `fe7d16a3614a45ebb179210cd8171b5f` completed in
+  **13m 26.7s**; final FFmpeg took **111.326s**. Output is accessible (HTTP 200),
+  88.066667s at 30fps. API fixes were deployed during this run; it is not an
+  uninterrupted benchmark. Human content review remains.
+- Post-fix checks passed: **70 TypeScript, 8 frontend and 8 Python tests**,
+  TypeScript checking and the Vite production build.
+- Live YouTube analytics and Instagram insights returned HTTP 200.
+- Browser soundtrack preview and asset-only CircleCI edit passed: saved 15% drama
+  music, zero new provider calls, accessible final MP4 and approval enabled.
+- Production Vercel origin is unknown; frontend deployment/CORS remain unverified.
+- Render scheduler ownership guard deployment is unverified; the Render health check timed out.
+  Scheduler owner remains **Render**. Dual-backend availability is not verified.
+- Google/Meta callbacks still need provider-console allowlisting.
+- No live Cloudflare public publishing test has been completed.
+- Additional-language variant fan-out is unsupported. No free-tier fit is guaranteed.
 
 ## Implemented path
 
 ### Fresh-generation live-test path
 
 `POST /migration/generations` with admin bearer, a new 32-hex `Idempotency-Key`,
-and `{"channel":"lorehush"}` starts a **new** English single-narrator video.
-`GET /migration/generations/ID` returns progress. Only use after deploying both
-Workflows, applying both SQL functions and pushing the CircleCI checkout branch.
+and `{"channel":"lorehush"}` starts a **new review-only** video using the channel's
+primary-language and conversation configuration. `GET /migration/generations/ID`
+returns progress. Runtime prerequisites include all Workflow bindings, SQL migrations
+and the CircleCI checkout branch described below.
 
 Generation runs on Cloudflare: five candidate concepts, permanent pgvector reservation,
 premise, script, independent QA/revisions, voice direction, free Gemini narration with
 Groq fallback, Groq word timestamps, per-scene fresh images, edit decisions and publishing copy.
 CircleCI performs audio preparation, then canonical caption/timeline construction and rendering.
-All new media/checkpoints go to Cloudinary. Completion writes the new Video as
-`AWAITING_APPROVAL`, with no automatic publishing. Render does not claim its `cf_*` jobs.
+All new media/checkpoints go to Cloudinary. The review-only route completes into
+`AWAITING_APPROVAL`, with no automatic publishing. Native dashboard generation via
+`POST /api/channels/:slug/run` supports review, direct and settings-based publishing
+policies, plus destination and topic selection. Generation requires a 32-hex
+`Idempotency-Key`; retry a lost response using the same key. Render does not claim
+Cloudflare's `cf_*` jobs.
 
-This path is deliberately limited to **English single-narrator review-only testing**.
-It does not claim conversation, multilingual, scheduling, OAuth, dashboard-route,
-music-editor or publishing migration parity. Keep existing Render routes enabled.
+Native generation supports single-narrator and Alex/Sam duo conversations, including
+speaker-aware speech generation, and the configured primary language. Non-English
+narration uses translated English phrase captions. This does not implement
+additional-language variant fan-out or establish live quality across every language.
 Free text keys are swept independently (Gemini then Groq), with at most two Workflow
 retries after cooldown; no paid Gemini fallback in this live-test path. An uncertain
 image purchase is not automatically billed again. Review its provider reservation.
@@ -67,21 +93,30 @@ preserved. The existing `low_memory` code is not changed or duplicated.
 
 ## Production safety / same database
 
-- No D1, Redis, Celery, new production database or table changes. One additive
-  `public.cf_media_task` function is installed; no existing table/RLS/schema layout changes.
+- No D1, Redis, Celery or new production database is required. SQL files `001`–`007`
+  install media, generation, dashboard, schedule, publishing, editing and admin RPCs
+  in the existing Supabase database, plus `cf_image_rate`, `cf_music_assets` and
+  `cf_media_edits` support tables with restricted access.
 - Existing PostgreSQL + pgvector tables remain intact. No uniqueness logic is replaced.
 - Pilot `jobs.status` values are `cf_waiting`, `cf_done`, `cf_failed`; Render does not claim them.
 - Pilot render tasks use `next_trigger_at = 2100-01-01`; Render's outbox does not dispatch them and Python can decode their timestamps.
 - `continuation_json.backend = cloudflare-pilot` scopes all worker claims.
-- Pilot results live in `render_tasks.result_json`; **source Video records, assets,
-  publishing and approval state are never changed**. Thus production can keep serving them.
+- Isolated media-task results live in `render_tasks.result_json`; submitting an existing
+  manifest alone does not replace its source video. Native generation, editing,
+  approval, publishing and admin routes intentionally update their corresponding
+  records in the shared database. Settings/channel changes can affect both backends.
 - Idempotency-Key is required. Retry submission with the same ID after a network failure.
 - Duplicate CircleCI runs cannot claim a task owned by another worker. A lost claim
   response can be retried by the same owner. Running tasks are never automatically reclaimed.
-- The deadline is four hours. Workflow polls the DB every ten minutes when completion
-  event delivery fails. A stopped/crashed Workflow requires operator recovery; this pilot
-  deliberately installs no global cron that might compete with production scheduling.
-- `ENABLE_MEDIA_PILOT=false` by default. No production cutover occurs on deployment.
+- The media deadline is four hours. Workflow polls the DB every ten minutes when
+  completion event delivery fails. A stopped/crashed Workflow requires operator recovery.
+- Wrangler configures a once-per-minute cron for scheduling and publishing reconciliation.
+  Generation scheduling uses shared ownership; selecting Cloudflare requires the
+  deployed Render `/health` to attest `scheduler_owner_guard: true`. That guard is
+  currently not deployed, so keep owner `render`. Publishing reconciliation is separate
+  from scheduler ownership and can dispatch eligible Cloudflare videos.
+- The checked-in `ENABLE_MEDIA_PILOT` is `true`; it gates HTTP routes after health,
+  not the cron handler. Deploying does not itself transfer scheduler ownership.
 
 ## Storage compatibility
 
@@ -114,23 +149,25 @@ Workflow binding: `MEDIA_WORKFLOW`; class `MediaWorkflow`;
 Workflow name: `story-shorts-media-pilot` (declared in `wrangler.jsonc`).
 Fresh generation also binds `GENERATION_WORKFLOW` (`GenerationWorkflow`,
 `story-shorts-generation-pilot`) and `GENERATION_STAGE` (`GenerationStageWorkflow`,
-`story-shorts-generation-stage`). All are deployed together by Wrangler.
+`story-shorts-generation-stage`). Native editing binds `EDITING_WORKFLOW`
+(`EditingWorkflow`, `story-shorts-editing`); publishing binds `PUBLISH_WORKFLOW`
+(`PublishingWorkflow`, `story-shorts-publishing`). All five deploy together via Wrangler.
 No D1/KV/R2/Queues/Hyperdrive binding is required by this pilot.
 Database operations use Supabase's existing HTTPS Data API. The pilot-specific
-`cf_media_task` RPC keeps claims and multi-table updates atomic inside PostgreSQL.
+RPCs keep claims and multi-table updates atomic inside PostgreSQL.
 Only `service_role` can execute it; PUBLIC, anon and authenticated are explicitly denied.
 No raw SQL endpoint is exposed. A direct TCP driver was removed because this pooler's
 private CA chain failed Workers TLS verification and surfaced as reconnect/subrequest
 exhaustion. TLS is NOT disabled. No Hyperdrive or other service is added.
 
-Before deploying, install the function from a local **backend** terminal:
+Before a deployment, review/install SQL files `001`–`007` from a local **backend** terminal:
 
 ```powershell
 venv\Scripts\python.exe ..\cloudflare\scripts\install_rpc.py
 venv\Scripts\python.exe ..\cloudflare\scripts\install_rpc.py --apply
 ```
 
-The first command tests then rolls back everything. The second installs the function
+The first command tests then rolls back everything. The second installs the SQL
 but still rolls back fixture jobs/tasks. Existing backend/.env supplies DATABASE_URL
 only to this local installer; it is no longer required by the Worker.
 
@@ -148,10 +185,16 @@ Add secrets with `npx wrangler secret put NAME` (never commit values):
 | CIRCLECI_TOKEN | Personal token permitted to trigger the project |
 | CIRCLECI_PROJECT_SLUG | Copy the project slug verbatim from CircleCI |
 | CIRCLECI_PIPELINE_DEFINITION_ID | ID of the NEW pilot pipeline below, not the Render pipeline |
+| GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET | Google OAuth app credentials for YouTube and analytics |
+| META_APP_ID / META_APP_SECRET | Meta OAuth app credentials for Instagram and insights |
+| OAUTH_ENCRYPTION_KEY | Optional explicit credential-encryption key; preserve compatibility with stored connections or reconnect |
 
 Nonsecret vars are in `wrangler.jsonc`: branch, CORS origins, Cloudinary prefix,
-and pilot enable flag. Change `ENABLE_MEDIA_PILOT` to `true` only after credentials
-and the dedicated CircleCI pipeline/context are configured. Deploy with `npm run deploy`.
+enable flag, `RENDER_API_ORIGIN`, `GOOGLE_REDIRECT_URI`, `META_REDIRECT_URI` and
+`META_API_VERSION`. The current CORS list contains only localhost origins. Configure
+credentials and the dedicated CircleCI pipeline/context before deployment. The
+deployment command is `npm run deploy`; these instructions do not establish that
+the current source or configuration is deployed.
 Do not add paid-plan CPU overrides without explicitly choosing a paid plan.
 
 ## Separate CircleCI setup
@@ -219,20 +262,41 @@ For audio preparation, POST a manifest to `/migration/media-tasks`, with a fresh
 Wrap the example as `{"video_id":"...","manifest":{...}}` in the POST body.
 ASR must consume this prepared audio, not raw TTS; otherwise captions will drift.
 
-## Still on Render / NOT implemented in this pilot
+## Native dashboard/API coverage
 
-- All existing frontend API routes, settings/channel CRUD and dashboard integration.
-- Full production parity beyond the new English single-narrator test route: conversation
-  and multilingual generation, paid-provider options, complete cost/token accounting,
-  channel memory/editorial quality regression coverage and dashboard generation controls.
-- English ASR/canonical captions work in the fresh pilot; translated captions and
-  existing edit/re-render dashboard orchestration are not migrated.
-- Google/Meta OAuth, review approval, YouTube/Instagram publishing and analytics.
-- Scheduling and full end-to-end generation/re-render/speed-edit orchestration.
+| Capability | Implementation |
+|---|---|
+| Dashboard generation | Channel runs, recent videos, progress, timing and Cloudinary previews |
+| Publishing | Version-specific approval, YouTube resumable upload, Instagram Reel workflow, publication status and duplicate/uncertain-upload protection |
+| Accounts and analytics | Google/Meta OAuth connection routes, YouTube analytics and Instagram insights |
+| Scheduling | Schedule read/save, daily batch claiming, shared owner guard and cron dispatch |
+| Editing | Saved-asset re-render, speed adjustment with new alignment/captions, BGM crop/mix/ducking through CircleCI |
+| Music | Signed Cloudinary upload, catalog registration/removal and legacy checksum registration |
+| Administration | Validated settings updates and channel create/read/update/delete |
+| Narration | Single narrator or Alex/Sam duo; configured primary language and translated English captions |
 
-These are required parity gates before calling this a production migration. Do not
-remove Render or repoint Vercel just because the isolated media pilot succeeds.
-The current pilot does not proxy unimplemented routes to Render or silently run local FFmpeg.
+The native UI calls Cloudflare routes directly; it does not proxy unsupported actions
+to Render. Additional-language fan-out remains unsupported. Full production parity,
+complete accounting and editorial/quality regression coverage are not established
+by this implementation inventory or the historical unit-test counts.
+
+## Production checklist (pending gates)
+
+- [x] Re-run relevant checks and verify the fresh review run reaches success with
+  accessible output, duration/FPS and render metrics. Human editorial review remains.
+- [ ] Identify the production Vercel origin, configure both API bases and exact CORS
+  allowlists, and verify frontend operation against each backend.
+- [ ] Deploy/verify the Render scheduler guard before transferring ownership;
+  confirm `/health` reports `scheduler_owner_guard: true` and only one scheduler owns
+  generation. Current owner stays Render.
+- [ ] Allowlist the configured `/auth/google/callback` and `/auth/meta/callback` URLs
+  in the respective provider consoles; verify account connection and required access.
+- [ ] Verify current SQL, five Workflows, secrets and CircleCI checkout/config agree
+  with the intended release; keep the existing Render pipeline available.
+- [ ] Validate editing, approval and publishing end to end on intended destinations,
+  including a controlled live public publish and status reconciliation. None is claimed
+  complete by the current fresh review run.
+- [ ] Measure actual usage and costs against account limits before increasing load.
 
 ## Free-tier gate
 
@@ -246,20 +310,19 @@ This is bounded parallel network I/O, not image processing inside Workers.
 Rate contention and uncertain purchases still fail closed after bounded attempts.
 No new live speed or CPU benchmark has been performed for this change.
 
-Cloudflare Free has a small CPU allowance and a 3,000 Workflow steps/day allowance;
-measure real deployed CPU before deciding whether it fits. Dry-run bundling cannot
-prove free-tier CPU compliance. No paid subscription is activated by these files.
+Measure deployed CPU, subrequests, Workflow steps, CircleCI consumption and provider
+usage against the actual account plans. Dry-run bundling and mocked tests cannot prove
+free-tier compliance; there is no guarantee this workload fits free limits.
 
-Cloudinary's 25 credits are shared across storage, delivery and transformations, not
-25 GB plus free bandwidth. Avoid transformation URLs; use canonical CircleCI outputs.
-Check account upload limits (Free: 10 MB image/raw, 100 MB video), source music sizes,
-retention and preview/publishing delivery costs. No automatic deletion is enabled.
+Cloudinary credits cover storage, delivery and transformations. Use canonical CircleCI
+outputs and check account upload limits, source music sizes, retention and
+preview/publishing delivery costs. No automatic deletion is enabled.
 
 Official references:
-- https://developers.cloudflare.com/workflows/reference/limits/
-- https://developers.cloudflare.com/workflows/reference/pricing/
-- https://cloudinary.com/documentation/billing_and_plans
-- https://cloudinary.com/pricing/compare-plans
+- [Cloudflare Workflow limits](https://developers.cloudflare.com/workflows/reference/limits/)
+- [Cloudflare Workflow pricing](https://developers.cloudflare.com/workflows/reference/pricing/)
+- [Cloudinary billing and plans](https://cloudinary.com/documentation/billing_and_plans)
+- [Cloudinary plan comparison](https://cloudinary.com/pricing/compare-plans)
 
 ## Local verification
 
@@ -270,5 +333,6 @@ npm run build
 ..\backend\venv\Scripts\python.exe -m unittest discover -s tests -p test_media_worker.py -v
 ```
 
-Tests use fake credentials and mocked providers. No hosted Cloudflare/Cloudinary
-end-to-end result is claimed until that actual run has succeeded.
+These commands cover Worker checks/build and the media-worker Python tests; they are
+not the full cross-repository regression suite. Mocked tests do not verify live OAuth,
+publishing or production limits. See the current verification snapshot above.

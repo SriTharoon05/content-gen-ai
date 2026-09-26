@@ -175,6 +175,8 @@ export default {
       }
       throw new ApiError(404,'Unknown API route');
     } catch (error) {
+      if(!(error instanceof ApiError))console.error(JSON.stringify({event:'api_failure',kind:error instanceof Error?error.name:'Unknown',
+        frames:error instanceof Error?error.stack?.split('\n').slice(1,4).map(line=>line.replace(/https?:\/\/\S+/g,'[url]')):[]}));
       return reply({detail:error instanceof ApiError?error.message:'Operation failed; inspect sanitized server logs'},error instanceof ApiError?error.status:500);
     }
   }

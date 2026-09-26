@@ -59,7 +59,7 @@ export default function LiveMusicPreview({video,track,form,ceiling,urls}) {
     const m={ctx,sources:[],frame:0};mixer.current=m
     try{
       await ctx.resume()
-      const decode=async url=>{const r=await fetch(url);if(!r.ok)throw Error('Saved audio is unavailable for live preview');return ctx.decodeAudioData(await r.arrayBuffer())}
+      const decode=async url=>{const r=await fetch(url,{signal:AbortSignal.timeout(60000)});if(!r.ok)throw Error('Saved audio is unavailable for live preview');return ctx.decodeAudioData(await r.arrayBuffer())}
       const [voice,bed]=await Promise.all([decode(urls?.narration || mediaUrl.narration(video.id)),track?decode(urls?.music || mediaUrl.music(track.id)):Promise.resolve(null)])
       if(mixer.current!==m)return
       m.voice=voice;m.bed=bed;m.gain=ctx.createGain();m.gain.gain.value=0
