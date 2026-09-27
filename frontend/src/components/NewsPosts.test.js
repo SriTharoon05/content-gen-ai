@@ -93,7 +93,7 @@ test('generation retries retain the 32-hex idempotency key and original channel'
   const h=await harness({post:async()=>{if(++attempts===1)throw Error('Timeout');return{id:'job'}}})
   h.button('Generate one news post').props.onClick();await settle()
   assert.equal(h.calls.length,0)
-  assert.ok(nodes(h.render()).some(node=>node.type==='p'&&text(node).includes('paid image credits')))
+  assert.ok(nodes(h.render()).some(node=>node.type==='p'&&text(node).includes('separate paid image generation')))
   h.button('Cancel generation').props.onClick()
   assert.equal(h.button('Confirm & generate'),undefined)
   assert.equal(h.calls.length,0)
