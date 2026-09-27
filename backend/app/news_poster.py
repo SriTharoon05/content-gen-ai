@@ -8,7 +8,7 @@ from io import BytesIO
 from pathlib import Path
 import unicodedata
 
-from PIL import Image, ImageCms, ImageDraw, ImageFont, ImageOps
+from PIL import Image, ImageChops, ImageStat, ImageCms, ImageDraw, ImageFont, ImageOps
 
 WIDTH, HEIGHT = 1080, 1350
 WHITE = (248, 249, 252)
@@ -185,6 +185,20 @@ def render_slide(manifest, root: Path, output: Path):
         raise ValueError('hero.png must remain inside root')
     if output.resolve() == hero.resolve():
         raise ValueError('output must not overwrite hero.png')
+    # Check original assets, not composed cards whose shared text theme is similar.
+    with Image.open(hero) as image:
+        thumb = ImageOps.exif_transpose(image).convert('RGB').resize((32, 32))
+    for index in range(3):
+        reference = root / f'reference-{index}.png'
+        if reference.exists():
+            if reference.resolve().parent != root:
+                raise ValueError('reference image must remain inside root')
+            with Image.open(reference) as image:
+                other = ImageOps.exif_transpose(image).convert('RGB').resize((32, 32))
+            # Compression/resolution variants are rejected as well as exact copies.
+            rms = ImageStat.Stat(ImageChops.difference(thumb, other)).rms
+            if sum(rms) / 3 < 14:
+                raise ValueError('Slide image is too similar to another slide; distinct image required')
     cover = slide['index'] == 1
     layout = _content_layout(slide)
     top = layout['top']

@@ -8,7 +8,7 @@ Open the Cloudflare dashboard's **Instagram news** tab. Select a connected Insta
 - Exact URLs/titles, normalized outlet suffixes and conservative near-title matching exclude previously used news across channels, including historical news rows. Admission is serialized to prevent concurrent duplicate posts.
 - New news also reserves its entity, angle, concept and embedding in the existing video content ledger before image generation. Entity naming and semantic similarity are probabilistic: this is not a guarantee against every paraphrase. Older news posts were not retrospectively embedded; their title/source guards still apply.
 - Copy gets at most three attempts, with concrete layout repair feedback. Highlight formatting is repaired without changing factual prose. Provider exhaustion cools down before another key sweep.
-- One purchased hero image is reused for 1–3 Python-composed slides. Ambiguous image purchases are not automatically repeated.
+- Each slide has its own scene prompt and purchased image (1–3 per post). Assets are checkpointed per slide; layout edits reuse those individual assets. Exact hashes and a conservative thumbnail comparison reject duplicates within the carousel. This does not guarantee global visual uniqueness or catch every crop/semantic resemblance. Ambiguous image purchases are not automatically repeated.
 - New layouts/captions have no application-added image-generation badge. This does not disable any platform-required disclosure or make an illustration documentary evidence.
 - A public Instagram upload remains a separate explicit action. Generation-to-preview tests do not validate public publishing.
 

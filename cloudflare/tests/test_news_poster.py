@@ -147,6 +147,14 @@ class NewsPosterTests(unittest.TestCase):
         with self.assertRaises(OSError):
             poster.render_slide(manifest(), self.root, self.root / 'out.jpg')
 
+    def test_duplicate_or_recompressed_slide_image_is_rejected(self):
+        with Image.open(self.root / 'hero.png') as image:
+            image.resize((600, 450)).save(self.root / 'reference-0.png')
+        with self.assertRaisesRegex(ValueError, 'too similar'):
+            poster.render_slide(manifest(), self.root, self.root / 'duplicate.jpg')
+        Image.new('RGB', (600, 450), (220, 40, 20)).save(self.root / 'reference-0.png')
+        poster.render_slide(manifest(), self.root, self.root / 'different.jpg')
+
 
 if __name__ == '__main__':
     suite = unittest.main(exit=False)
