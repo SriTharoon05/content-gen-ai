@@ -13,6 +13,8 @@ export interface Env {
   CIRCLECI_BRANCH: string;
   CORS_ORIGINS: string;
   ENABLE_MEDIA_PILOT: string;
+  NEWSDATA_API_KEY?: string;
+  NEWS_WORKFLOW: Workflow<{id:string;phase:string;round?:number}>;
   RENDER_API_ORIGIN?: string;
   GOOGLE_CLIENT_ID: string;
   GOOGLE_CLIENT_SECRET: string;
@@ -32,7 +34,7 @@ export interface Env {
 export interface Asset {sha256: string; url?: string; key?: string;}
 export interface Manifest {
   version: number;
-  operation: 'assemble' | 'remix' | 'prepare_audio' | 'assemble_script';
+  operation: 'assemble' | 'remix' | 'prepare_audio' | 'assemble_script' | 'news_slide';
   files: Record<string, Asset>;
   settings: Record<string, any>;
   images?: string[];

@@ -15,7 +15,7 @@ export function allowedMediaUrl(value: string, env: Env) {
 }
 
 export function validateManifest(m: Manifest, env: Env) {
-  if (m.version !== 1 || !['assemble', 'remix', 'prepare_audio','assemble_script'].includes(m.operation)) throw new ApiError(400, 'Unsupported media operation');
+  if (m.version !== 1 || !['assemble', 'remix', 'prepare_audio','assemble_script','news_slide'].includes(m.operation)) throw new ApiError(400, 'Unsupported media operation');
   if (!m.files || Object.keys(m.files).length > 128) throw new ApiError(400, 'Invalid asset count');
   for (const [name, asset] of Object.entries(m.files)) {
     if (!name || name.startsWith('/') || /[\\:]/.test(name) || name.split('/').includes('..')) throw new ApiError(400, 'Unsafe asset path');
@@ -23,11 +23,12 @@ export function validateManifest(m: Manifest, env: Env) {
     if (asset.url) allowedMediaUrl(asset.url, env);
     else if (!asset.key || asset.key.startsWith('/') || asset.key.split('/').includes('..')) throw new ApiError(400, 'Missing asset location');
   }
-  const required = m.operation === 'prepare_audio' ? ['source.audio',...(m.sources||[])] : ['narration.wav', ...(m.operation === 'remix' ? ['source.mp4'] : [...(m.operation==='assemble_script'?[]:['captions.ass']), ...(m.images || [])])];
+  const required = m.operation==='news_slide'?['hero.png']:m.operation === 'prepare_audio' ? ['source.audio',...(m.sources||[])] : ['narration.wav', ...(m.operation === 'remix' ? ['source.mp4'] : [...(m.operation==='assemble_script'?[]:['captions.ass']), ...(m.images || [])])];
   if (required.some(name => !m.files[name])) throw new ApiError(400, 'Required media input missing');
   if (['assemble','assemble_script'].includes(m.operation) && (!m.images?.length || m.images.length > 100)) throw new ApiError(400, 'Invalid scene count');
   if(m.operation==='assemble_script'&&(!m.words?.length||!m.script?.beats?.length))throw new ApiError(400,'Measured words and script required');
-  if (m.operation !== 'prepare_audio' && (m.settings?.video?.width !== 720 || m.settings?.video?.height !== 1280 || m.settings?.video?.fps !== 30)) throw new ApiError(400, 'Expected canonical 720x1280, 30 FPS');
+  if (!['prepare_audio','news_slide'].includes(m.operation) && (m.settings?.video?.width !== 720 || m.settings?.video?.height !== 1280 || m.settings?.video?.fps !== 30)) throw new ApiError(400, 'Expected canonical 720x1280, 30 FPS');
+  if(m.operation==='news_slide'&&(!m.slide||typeof m.slide.headline!=='string'||m.slide.headline.length>100||typeof m.slide.body!=='string'||m.slide.body.length>260))throw new ApiError(400,'Invalid news slide');
   // Never accept executable paths or a caller-supplied output target.
   m.settings = {...m.settings, runtime: {ffmpeg_path: 'ffmpeg', ffprobe_path: 'ffprobe', low_memory_render: true}};
   delete m.output_key;
@@ -52,6 +53,7 @@ export async function resolveAssets(manifest: Manifest, env: Env) {
 }
 
 export function outputTarget(env: Env, id: string, operation: string) {
+  if(operation==='news_slide')return {publicId:`${env.CLOUDINARY_PREFIX}/tasks/${id}/post`,resourceType:'image',extension:'jpg'};
   const audio = operation === 'prepare_audio';
   return {publicId: `${env.CLOUDINARY_PREFIX}/tasks/${id}/${audio ? 'narration' : 'final'}`, resourceType: 'video', extension: audio ? 'wav' : 'mp4'};
 }
@@ -77,11 +79,12 @@ export async function assetUpload(env: Env, input: {kind: string; sha256: string
 
 export async function verifyOutput(env: Env, id: string, operation: string) {
   const target = outputTarget(env, id, operation);
-  const r = await fetch(`https://api.cloudinary.com/v1_1/${env.CLOUDINARY_CLOUD_NAME}/resources/video/upload/${encodeURIComponent(target.publicId)}`, {
+  const r = await fetch(`https://api.cloudinary.com/v1_1/${env.CLOUDINARY_CLOUD_NAME}/resources/${target.resourceType}/upload/${encodeURIComponent(target.publicId)}`, {
     headers: {Authorization: 'Basic ' + btoa(`${env.CLOUDINARY_API_KEY}:${env.CLOUDINARY_API_SECRET}`)},
   });
   if (!r.ok) throw new ApiError(502, `Cloudinary output verification failed (${r.status})`);
   const asset = await r.json() as any;
   if (asset.public_id !== target.publicId || asset.format !== target.extension || asset.bytes < 2048) throw new ApiError(409, 'Invalid rendered output');
-  return {url: allowedMediaUrl(asset.secure_url, env), bytes: asset.bytes, duration: asset.duration};
+  if(operation==='news_slide'&&(asset.width!==1080||asset.height!==1350||asset.bytes>8*1024*1024))throw new ApiError(409,'Invalid Instagram image dimensions or size');
+  return {url: allowedMediaUrl(asset.secure_url, env), bytes: asset.bytes, duration: asset.duration,width:asset.width,height:asset.height};
 }

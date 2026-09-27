@@ -26,6 +26,7 @@ def main():
                 cursor.execute((Path(__file__).resolve().parents[1]/'sql'/'005_publish_rpc.sql').read_text())
                 cursor.execute((Path(__file__).resolve().parents[1]/'sql'/'006_edit_rpc.sql').read_text())
                 cursor.execute((Path(__file__).resolve().parents[1]/'sql'/'007_admin_rpc.sql').read_text())
+                cursor.execute((Path(__file__).resolve().parents[1]/'sql'/'008_news_rpc.sql').read_text())
             def call(action,task='',payload=None):
                 return connection.execute(text('SELECT public.cf_media_task(:a,:id,CAST(:p AS jsonb))'),
                     {'a':action,'id':task,'p':json.dumps(payload or {})}).scalar_one()

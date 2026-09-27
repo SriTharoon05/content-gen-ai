@@ -29,7 +29,7 @@ BEGIN
           'started_at',v.created_at,'finished_at',CASE WHEN j.status IN ('cf_done','cf_failed') THEN j.updated_at ELSE NULL END,
           'elapsed_seconds',extract(epoch FROM (CASE WHEN j.status IN ('cf_done','cf_failed') THEN j.updated_at ELSE now() END-v.created_at)))) AS row_data
       FROM public.videos v LEFT JOIN public.jobs j ON j.id=v.id
-      WHERE v.options_json->>'execution_backend'='cloudflare-generation'
+      WHERE v.options_json->>'execution_backend'='cloudflare-generation' AND coalesce(v.options_json->>'news_post','false')<>'true'
       ORDER BY v.created_at DESC LIMIT 50
     ) q;
     RETURN jsonb_build_object('videos',data);

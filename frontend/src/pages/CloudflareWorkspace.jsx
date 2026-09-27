@@ -7,11 +7,12 @@ import CloudflareEditor from '../components/CloudflareEditor'
 import CloudflareMusic from '../components/CloudflareMusic'
 import CloudflareChannels from '../components/CloudflareChannels'
 import CloudflareSettings from '../components/CloudflareSettings'
+import NewsPosts from '../components/NewsPosts'
 import {Field,Select,Chips,StatePill} from '../components/ui'
 import {cloudflareRequest,postCloudflare,safeMediaUrl} from '../cloudflareApi'
 import './CloudflareWorkspace.css'
 
-const tabs=[['videos','Videos & review'],['channels','Channels & accounts'],['schedule','Schedule'],['music','Music library'],['settings','Settings']]
+const tabs=[['videos','Videos & review'],['news','Instagram news'],['channels','Channels & accounts'],['schedule','Schedule'],['music','Music library'],['settings','Settings']]
 
 export default function CloudflareWorkspace() {
   const [channels,setChannels]=useState([]),[videos,setVideos]=useState([]),[channel,setChannel]=useState('lorehush')
@@ -66,6 +67,7 @@ export default function CloudflareWorkspace() {
       <section className="card table-scroll cf-panel"><table><thead><tr><th>Video / channel</th><th>Status</th><th>Total generation</th><th>Length</th><th>Details</th></tr></thead><tbody>{videos.map(v=><tr key={v.id}><td><strong>{v.title||v.channel}</strong><div className="muted">{v.channel} · {v.id.slice(0,8)}</div></td><td><StatePill state={v.state}/><div className="muted">{v.stage_detail}</div></td><td><GenerationTime timing={v.generation_timing}/></td><td>{v.duration_seconds?`${v.duration_seconds.toFixed(1)}s`:'—'}</td><td><button className="btn small" onClick={()=>leave(()=>setSelected(v.id))}>{v.output?'Review / edit':'View progress'}</button></td></tr>)}</tbody></table>{!videos.length&&<p className="muted">No Cloudflare videos yet. Existing Render jobs remain in the Render workspace.</p>}</section>
     </>}
     {tab==='channels'&&<CloudflareChannels channels={channels} onUpdated={load}/>}
+    <div hidden={tab!=='news'}><NewsPosts active={tab==='news'}/></div>
     {tab==='schedule'&&<CloudflareSchedule channels={channels}/>}
     {tab==='music'&&<CloudflareMusic/>}
     {tab==='settings'&&<CloudflareSettings/>}

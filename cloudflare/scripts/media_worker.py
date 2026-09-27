@@ -23,6 +23,9 @@ os.environ.setdefault('RENDER_PROFILE', 'auto')
 def execute_media(manifest, root, output):
     if manifest.get('version') != 1:
         raise ValueError('Unsupported manifest version')
+    if manifest['operation'] == 'news_slide':
+        from app.news_poster import render_slide
+        return render_slide(manifest, root, output)
     if manifest['operation'] == 'prepare_audio':
         from app.audio import pace_and_trim, probe_duration
         from app.settings_store import render_settings
@@ -184,7 +187,7 @@ def main():
         with tempfile.TemporaryDirectory(prefix='cf-media-') as folder:
             root = Path(folder)
             download_assets(manifest, root)
-            output = root / ('prepared.wav' if manifest['operation'] == 'prepare_audio' else 'final.mp4')
+            output = root / ('post.jpg' if manifest['operation']=='news_slide' else 'prepared.wav' if manifest['operation'] == 'prepare_audio' else 'final.mp4')
             from app.render_metrics import measure
             with measure() as metrics:
                 info = execute_media(manifest, root, output)
@@ -197,7 +200,7 @@ def main():
                 try:
                     with output.open('rb') as source:
                         r = httpx.post(capability['url'], data=capability['fields'],
-                            files={'file': (output.name, source, 'audio/wav' if output.suffix == '.wav' else 'video/mp4')}, timeout=300)
+                            files={'file': (output.name, source, 'image/jpeg' if output.suffix=='.jpg' else 'audio/wav' if output.suffix == '.wav' else 'video/mp4')}, timeout=300)
                     r.raise_for_status()
                     break
                 except httpx.HTTPError:

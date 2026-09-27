@@ -6,6 +6,8 @@ import {handleDashboardAdmin} from './dashboardAdmin';
 import {handleEditing} from './editing';
 import {publishingRoute,reconcilePublishing} from './publishing';
 import {oauthRoute} from './oauth';
+import {newsRoute,newsTick} from './news';
+export {NewsWorkflow} from './news';
 export {MediaWorkflow} from './workflow';
 export {GenerationWorkflow} from './generation';
 export {GenerationStageWorkflow} from './stages';
@@ -30,7 +32,7 @@ async function body(request: Request): Promise<any> {
 
 export default {
   async scheduled(_event:ScheduledController,env:Env,ctx:ExecutionContext){
-    ctx.waitUntil((async()=>{await tick(env);await reconcilePublishing(env);})());
+    ctx.waitUntil((async()=>{await tick(env);await reconcilePublishing(env);await newsTick(env);})());
   },
   async fetch(request: Request, env: Env): Promise<Response> {
     const origin = request.headers.get('Origin') || '';
@@ -56,7 +58,7 @@ export default {
       }
       if(path.startsWith('/api/')){
         await authorize(request,env.ADMIN_TOKEN);
-        for(const handler of [handleDashboardAdmin,handleEditing,publishingRoute,oauthRoute]){
+        for(const handler of [newsRoute,handleDashboardAdmin,handleEditing,publishingRoute,oauthRoute]){
           const response=await handler(request,env);if(response)return wrap(response);
         }
       }
@@ -163,10 +165,15 @@ export default {
         if(data.status==='succeeded'){
           const verified=await verifyOutput(env,id,task.manifest_json.operation);
           const measured=Number(data.metrics?.duration);
+          if(task.manifest_json.operation==='news_slide'){
+            if(data.metrics?.width!==1080||data.metrics?.height!==1350)throw new ApiError(409,'Missing measured image dimensions');
+            result={...verified,metrics:data.metrics||{}};
+          }else{
           if(!Number.isFinite(measured)||measured<=0||measured>600)throw new ApiError(409,'Missing measured output duration');
           if(verified.duration!=null&&Math.abs(verified.duration-measured)>.2)throw new ApiError(409,'Output duration disagrees with canonical probe');
           // Cloudinary omits duration for some WAV resources; the trusted canonical ffprobe result supplies it.
           result={...verified,duration:verified.duration??measured,metrics:data.metrics||{}};
+          }
         }
         // Never store raw signed URLs or provider exceptions as error strings.
         await finish(env,id,hash,data.status,result,data.status==='failed'?'CircleCI media processing failed; inspect sanitized job logs':'');
