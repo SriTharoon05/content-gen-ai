@@ -13,7 +13,7 @@
     "META_API_VERSION": "v25.0",
     "CIRCLECI_BRANCH": "codex/cloudflare-fresh-generation",
     "CLOUDINARY_PREFIX": "story-shorts-cloudflare",
-    "CORS_ORIGINS": "http://localhost:5173,http://127.0.0.1:5173"
+    "CORS_ORIGINS": "http://localhost:5173,http://127.0.0.1:5173,http://127.0.0.1:5174"
   },
   "triggers": {"crons": ["* * * * *"]},
     "observability": {

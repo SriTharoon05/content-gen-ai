@@ -19,6 +19,7 @@ export default function NewsPosts({active=true}) {
   const [data,setData]=useState(null),[form,setForm]=useState(defaults),[dirty,setDirty]=useState(false)
   const [error,setError]=useState(''),[loadError,setLoadError]=useState(''),[notice,setNotice]=useState(''),[busy,setBusy]=useState('')
   const [pending,setPending]=useState(null),[publishLocks,setPublishLocks]=useState({})
+  const [confirmation,setConfirmation]=useState(null)
   const dirtyRef=useRef(false),sequence=useRef(0),actionLock=useRef(false),pendingRef=useRef(null)
   const load=useCallback(async()=>{
     const request=++sequence.current
@@ -31,7 +32,7 @@ export default function NewsPosts({active=true}) {
   },[])
   useEffect(()=>{if(!active)return;load();const timer=setInterval(load,10000);return()=>{clearInterval(timer);sequence.current++}},[load,active])
   useEffect(()=>{const guard=e=>{if(dirtyRef.current){e.preventDefault();e.returnValue=''}};window.addEventListener('beforeunload',guard);return()=>window.removeEventListener('beforeunload',guard)},[])
-  const update=patch=>{dirtyRef.current=true;setDirty(true);setForm(f=>({...f,...patch}))}
+  const update=patch=>{setConfirmation(null);dirtyRef.current=true;setDirty(true);setForm(f=>({...f,...patch}))}
   const act=async(key,operation)=>{
     if(actionLock.current)return
     actionLock.current=true;setBusy(key);setError('');setNotice('')
@@ -61,7 +62,8 @@ export default function NewsPosts({active=true}) {
     })
   }
   const run=()=>{
-    if(!pendingRef.current&&!window.confirm('Generate one Instagram news carousel? This uses one AI hero image and paid image credits, reused across 1–3 slides.'))return
+    if(!pendingRef.current&&(confirmation?.type!=='generate'||confirmation.channel!==form.channel||dirty))return
+    setConfirmation(null)
     act('run',async()=>{
       const request=pendingRef.current||{id:crypto.randomUUID().replaceAll('-',''),channel:form.channel}
       pendingRef.current=request;setPending(request)
@@ -72,7 +74,8 @@ export default function NewsPosts({active=true}) {
     })
   }
   const publish=post=>{
-    if(!window.confirm(`Publish “${post.title||post.id}” to Instagram for ${post.channel}? This makes the approved carousel public.`))return
+    if(confirmation?.type!=='publish'||confirmation.id!==post.id||post.status!=='approved'||publishLocks[post.id]||!data?.channels?.some(c=>c.slug===post.channel&&c.instagram_connected))return
+    setConfirmation(null)
     act(`publish-${post.id}`,async()=>{
       setPublishLocks(locks=>({...locks,[post.id]:true}))
       try{await postCloudflare(`/news/${encodeURIComponent(post.id)}/publish`,{});setNotice('Instagram publication requested. Check the updated status below.')}
@@ -114,8 +117,8 @@ export default function NewsPosts({active=true}) {
       </form>
       <section className="card cf-panel"><h2>Prepare news</h2><div className="row news-actions">
         <button className="btn" disabled={!!busy} onClick={()=>act('fetch',async()=>{await postCloudflare('/news/fetch',{});setNotice('News feed fetched and cached.')} )}>{busy==='fetch'?'Fetching…':'Fetch & cache news'}</button>
-        <button className="btn primary" disabled={!!busy||(!pending&&(dirty||!channels.some(c=>c.slug===form.channel)))} onClick={run}>{busy==='run'?'Requesting…':pending?'Retry same generation':'Generate one news post'}</button>
-      </div>{dirty&&<p className="muted">Save configuration before starting a new generation.</p>}{pending&&<p className="note warn">Unresolved generation for {pending.channel}. Retry reuses its original request ID.</p>}</section>
+        <button className="btn primary" disabled={!!busy||(!pending&&(dirty||!channels.some(c=>c.slug===form.channel)))} onClick={()=>pending?run():setConfirmation({type:'generate',channel:form.channel})}>{busy==='run'?'Requesting…':pending?'Retry same generation':'Generate one news post'}</button>
+      </div>{confirmation?.type==='generate'&&<div className="note warn" role="status"><p>Generate one Instagram news carousel for {confirmation.channel}? This uses paid image credits for one AI hero image, reused across 1–3 slides.</p><div className="row news-actions"><button className="btn primary" disabled={!!busy||dirty||confirmation.channel!==form.channel} onClick={run}>Confirm & generate</button><button className="btn" disabled={!!busy} onClick={()=>setConfirmation(null)}>Cancel generation</button></div></div>}{dirty&&<p className="muted">Save configuration before starting a new generation.</p>}{pending&&<p className="note warn">Unresolved generation for {pending.channel}. Retry reuses its original request ID.</p>}</section>
       <section aria-label="News posts" className="news-post-grid">
         {!posts.length&&<div className="card"><h2>No news posts yet</h2><p className="muted">Save your configuration, cache the feed, and generate a carousel to review.</p></div>}
         {posts.map(post=>{const connected=channels.some(c=>c.slug===post.channel&&c.instagram_connected),sourceUrl=safeMediaUrl(post.source?.url);return <article className="card news-post" key={post.id}>
@@ -129,8 +132,9 @@ export default function NewsPosts({active=true}) {
           {publishLocks[post.id]&&!['published','publishing','uncertain'].includes(post.status)&&<p className="note warn">A publication request was submitted. Repeat publishing is locked here; verify Instagram and refresh status.</p>}
           <div className="row news-actions">
             {post.status==='awaiting_approval'&&<button className="btn" disabled={!!busy} onClick={()=>act(`approve-${post.id}`,async()=>{await postCloudflare(`/news/${encodeURIComponent(post.id)}/approve`,{revision:1});setNotice('Carousel approved. Publish separately after confirming Instagram.')} )}>Approve carousel</button>}
-            {post.status==='approved'&&<button className="btn primary" disabled={!!busy||!connected||!!publishLocks[post.id]} onClick={()=>publish(post)}>Publish to Instagram…</button>}
+            {post.status==='approved'&&<button className="btn primary" disabled={!!busy||!connected||!!publishLocks[post.id]} onClick={()=>setConfirmation({type:'publish',id:post.id})}>Publish to Instagram…</button>}
           </div>
+          {confirmation?.type==='publish'&&confirmation.id===post.id&&post.status==='approved'&&!publishLocks[post.id]&&<div className="note warn" role="status"><p>Publish “{post.title||post.id}” to Instagram for {post.channel}? This makes the approved carousel public.</p><div className="row news-actions"><button className="btn primary" disabled={!!busy||!connected} onClick={()=>publish(post)}>Confirm & publish to Instagram</button><button className="btn" disabled={!!busy} onClick={()=>setConfirmation(null)}>Cancel publishing</button></div></div>}
           {post.status==='approved'&&!connected&&<p className="note warn">Select this channel above and connect Instagram before publishing.</p>}
         </article>})}
       </section>

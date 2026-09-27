@@ -89,4 +89,38 @@ BEGIN
   PERFORM public.cf_news('ingest','','{"articles":[]}');
   ASSERT (SELECT count(*) FROM public.cf_news_articles)=0;
 END $$;
+DO $$
+DECLARE a jsonb; b jsonb; r jsonb;
+BEGIN
+  a:=jsonb_build_object('title','Scientists Discover a “Fire Amoeba” That Defies Life’s Heat Limit - scitechdaily.com',
+    'source','SciTechDaily','url','https://scitechdaily.com/fire','description','Evidence of a heat tolerant amoeba',
+    'published_at',now());
+  b:=a||jsonb_build_object('title','Scientists Discover a "Fire Amoeba" That Defies Life''s Heat Limit',
+    'source','Other Outlet','url','https://other.example/fire');
+  ASSERT public.cf_news_titles_duplicate(a,b);
+  ASSERT public.cf_news_titles_duplicate(b,a);
+  ASSERT public.cf_news_titles_duplicate(b,b||jsonb_build_object('title',(b->>'title')||' | Other Outlet'));
+  ASSERT public.cf_news_titles_duplicate(b,b||jsonb_build_object('title',(b->>'title')||' — Other Outlet'));
+  ASSERT public.cf_news_titles_duplicate(b,b||jsonb_build_object('title','Scientists Discover Remarkable Fire Amoeba That Defies Lifes Heat Limit'));
+  ASSERT NOT public.cf_news_titles_duplicate(b,b||jsonb_build_object('title','Scientists Discover Fire Bacteria That Defies Lifes Heat Limit'));
+  ASSERT NOT public.cf_news_titles_duplicate(b,b||jsonb_build_object('title','Scientists Discover Fire Amoeba That Does Not Defy Lifes Heat Limit'));
+  ASSERT NOT public.cf_news_titles_duplicate('{"title":"Scientists discover six planets with 10 moons orbiting distant star"}',
+    '{"title":"Scientists discover six planets with 11 moons orbiting distant star"}');
+  ASSERT NOT public.cf_news_titles_duplicate('{"title":"Mars water discovered"}','{"title":"Mars water discovered underground"}');
+  ASSERT public.cf_news_title_key('{"title":"New planets found - evidence remains uncertain","source":"Science"}') LIKE '%evidence remains uncertain';
+  -- Cache admission collapses syndication; creation must still handle old cache
+  -- rows admitted before this migration. Failed posts permanently reserve titles.
+  r:=public.cf_news('ingest','',jsonb_build_object('articles',jsonb_build_array(a,b)));
+  ASSERT r->>'ingested'='1',r::text;
+  INSERT INTO public.cf_news_posts(id,channel,source,url_key,title_key,status,created_at)
+    VALUES('historical-fire','lorehush',a,'scitechdaily.com/fire','legacy title with outlet','failed',now()-interval '2 days');
+  INSERT INTO public.cf_news_articles(id,url_key,title_key,article,published_at)
+    VALUES('legacy-fire','other.example/fire','scientists discover a fire amoeba that defies life s heat limit',b,now());
+  ASSERT NOT EXISTS(SELECT 1 FROM jsonb_array_elements(public.cf_news('candidates')->'articles') x
+    WHERE x->>'url' IN ('https://other.example/fire','https://scitechdaily.com/fire'));
+  r:=public.cf_news('create','duplicate-fire',jsonb_build_object('channel','lorehush','source',b));
+  ASSERT r->>'status'='409',r::text;
+  ASSERT public.cf_news('ingest','',jsonb_build_object('articles',jsonb_build_array(b)))->>'ingested'='0';
+  ASSERT NOT has_function_privilege('anon','public.cf_news_titles_duplicate(jsonb,jsonb)','EXECUTE');
+END $$;
 ROLLBACK;

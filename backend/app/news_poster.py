@@ -183,8 +183,6 @@ def render_slide(manifest, root: Path, output: Path):
     draw = ImageDraw.Draw(canvas)
     _text(draw, slide['brand'], (64, 50, 830, 110), 32, 22, True)
     _text(draw, f"{slide['index']} / {slide['total']}", (850, 50, 1016, 110), 26, 16)
-    draw.rounded_rectangle((64, 140, 325, 184), radius=7, fill=(10, 16, 27, 255))
-    _text(draw, 'AI ILLUSTRATION', (78, 148, 312, 182), 21, 14, True, YELLOW)
     top = 670 if cover else 590
     draw.rectangle((64, top - 28, 150, top - 21), fill=YELLOW)
     _text(draw, slide['headline'], (64, top, 1016, top + 290),

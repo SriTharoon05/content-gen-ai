@@ -37,7 +37,7 @@ async function harness({post=async()=>({id:'job'}),popupBlocked=false}={}) {
   }
   const context={module:{exports:{}},React,URL,
     crypto:{randomUUID:()=> '12345678-1234-1234-1234-123456789abc'},
-    window:{confirm:()=>true,open:(...args)=>{opened.push(args);return popupBlocked?null:popup},location:{assign:url=>redirects.push(url)}},
+    window:{confirm:()=>{throw Error('Browser dialogs must not be used')},open:(...args)=>{opened.push(args);return popupBlocked?null:popup},location:{assign:url=>redirects.push(url)}},
     api:{safeMediaUrl:()=>'',cloudflareRequest:async()=>data,postCloudflare:async(path,body={},options)=>{calls.push({path,body,options});return post(path,body,options)}},
   }
   vm.runInNewContext(bundle.outputFiles[0].text,context)
@@ -92,6 +92,13 @@ test('generation retries retain the 32-hex idempotency key and original channel'
   let attempts=0
   const h=await harness({post:async()=>{if(++attempts===1)throw Error('Timeout');return{id:'job'}}})
   h.button('Generate one news post').props.onClick();await settle()
+  assert.equal(h.calls.length,0)
+  assert.ok(nodes(h.render()).some(node=>node.type==='p'&&text(node).includes('paid image credits')))
+  h.button('Cancel generation').props.onClick()
+  assert.equal(h.button('Confirm & generate'),undefined)
+  assert.equal(h.calls.length,0)
+  h.button('Generate one news post').props.onClick()
+  h.button('Confirm & generate').props.onClick();await settle()
   nodes(h.render()).find(node=>node.type==='select').props.onChange({target:{value:'other'}})
   h.button('Retry same generation').props.onClick();await settle()
   assert.equal(h.calls.length,2)
@@ -108,11 +115,14 @@ test('approval is separate from publishing; confirmation and uncertain-result lo
   assert.equal(h.calls[0].body.revision,1)
   assert.equal(h.calls.length,1)
   assert.equal(nodes(h.render()).filter(node=>node.type==='button'&&text(node)==='Publish to Instagram…').length,1)
-  h.context.window.confirm=()=>false
   h.button('Publish to Instagram…').props.onClick();await settle()
   assert.equal(h.calls.length,1)
-  h.context.window.confirm=()=>true
+  assert.ok(nodes(h.render()).some(node=>node.type==='p'&&text(node).includes('carousel public')))
+  h.button('Cancel publishing').props.onClick()
+  assert.equal(h.button('Confirm & publish to Instagram'),undefined)
+  assert.equal(h.calls.length,1)
   h.button('Publish to Instagram…').props.onClick();await settle()
+  h.button('Confirm & publish to Instagram').props.onClick();await settle()
   assert.equal(h.calls[1].path,'/news/approved/publish')
   assert.equal(Object.keys(h.calls[1].body).length,0)
   assert.equal(h.button('Publish to Instagram…').props.disabled,true)

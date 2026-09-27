@@ -46,6 +46,50 @@ ALTER TABLE public.cf_news_posts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.cf_news_requests ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.cf_news_config,public.cf_news_usage,public.cf_news_articles,public.cf_news_posts,public.cf_news_requests FROM PUBLIC,anon,authenticated;
 
+-- Compare source titles at read time as well as admission time: historical rows
+-- retain their original title_key and need no destructive re-key/backfill.
+CREATE OR REPLACE FUNCTION public.cf_news_title_key(article jsonb)
+RETURNS text LANGUAGE plpgsql IMMUTABLE SET search_path=pg_catalog AS $$
+DECLARE title text:=btrim(coalesce(article->>'title','')); suffix text; base text;
+BEGIN
+  -- Only recognize a domain or this article's declared outlet after a separator.
+  -- Do not strip arbitrary subtitles (which can contain the distinguishing fact).
+  suffix:=substring(title FROM '[[:space:]]+[-–—|][[:space:]]+([^|]+)$');
+  IF suffix IS NOT NULL AND (
+    suffix ~* '^(www\.)?[a-z0-9][a-z0-9.-]*\.[a-z]{2,24}$'
+    OR lower(regexp_replace(suffix,'[^[:alnum:]]','','g')) =
+       nullif(lower(regexp_replace(coalesce(article->>'source',''),'[^[:alnum:]]','','g')),'')) THEN
+    title:=left(title,length(title)-length(suffix));
+    title:=regexp_replace(title,'[[:space:]]+[-–—|][[:space:]]+$','');
+  END IF;
+  base:=replace(replace(lower(title),'’',''),'''','');
+  RETURN btrim(regexp_replace(base,'[^[:alnum:]]+',' ','g'));
+END $$;
+
+CREATE OR REPLACE FUNCTION public.cf_news_titles_duplicate(a jsonb,b jsonb)
+RETURNS boolean LANGUAGE plpgsql IMMUTABLE SET search_path=pg_catalog,public AS $$
+DECLARE ka text:=public.cf_news_title_key(a); kb text:=public.cf_news_title_key(b);
+  wa text[]; wb text[]; shared integer;
+  stop constant text[]:=ARRAY['a','an','the','and','or','of','to','in','on','at','for','by','with','from','that','this','is','are','was','were','as','its'];
+BEGIN
+  IF ka='' OR kb='' THEN RETURN false; END IF;
+  IF ka=kb THEN RETURN true; END IF;
+  SELECT array_agg(DISTINCT w ORDER BY w) INTO wa FROM regexp_split_to_table(ka,' ') w WHERE NOT w=ANY(stop);
+  SELECT array_agg(DISTINCT w ORDER BY w) INTO wb FROM regexp_split_to_table(kb,' ') w WHERE NOT w=ANY(stop);
+  IF coalesce(cardinality(wa),0)<6 OR coalesce(cardinality(wb),0)<6 THEN RETURN false; END IF;
+  -- Numbers and negation change the claim, even when most words are shared.
+  IF ARRAY(SELECT w FROM unnest(wa) w WHERE w ~ '[0-9]' OR w IN ('no','not','never','without','fails','failed'))
+    IS DISTINCT FROM ARRAY(SELECT w FROM unnest(wb) w WHERE w ~ '[0-9]' OR w IN ('no','not','never','without','fails','failed')) THEN RETURN false; END IF;
+  SELECT count(*) INTO shared FROM unnest(wa) w WHERE w=ANY(wb);
+  -- Deliberately conservative: all meaningful words in the shorter headline
+  -- must occur in the longer one, with >=85% coverage of the longer headline.
+  -- This catches small additions/reordering without conflating changed entities.
+  RETURN shared=least(cardinality(wa),cardinality(wb))
+    AND shared::numeric/greatest(cardinality(wa),cardinality(wb))>=0.85;
+END $$;
+REVOKE ALL ON FUNCTION public.cf_news_title_key(jsonb),public.cf_news_titles_duplicate(jsonb,jsonb) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.cf_news_title_key(jsonb),public.cf_news_titles_duplicate(jsonb,jsonb) TO service_role;
+
 CREATE OR REPLACE FUNCTION public.cf_news(p_action text,p_task_id text DEFAULT '',p_payload jsonb DEFAULT '{}')
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public,pg_temp AS $$
 <<news>>
@@ -66,6 +110,11 @@ BEGIN
   -- Config, fetch reservations, cache pruning and post creation share one lock.
   -- Limits are checked and consumed in the same transaction, including failed fetches.
   IF p_action IN ('config','reserve_fetch','ingest','create','tick','request','save') THEN
+    -- A fixed old snapshot cannot see a competing committed near-duplicate.
+    -- Fail closed rather than claim race safety outside READ COMMITTED.
+    IF p_action IN ('ingest','create') AND current_setting('transaction_isolation')<>'read committed' THEN
+      RETURN '{"status":409,"error":"News admission requires READ COMMITTED; retry in a new transaction"}';
+    END IF;
     PERFORM pg_advisory_xact_lock(hashtext('story-shorts:cf-news'));
   END IF;
   SELECT defaults || coalesce((SELECT jsonb_object_agg(key,value)
@@ -230,6 +279,12 @@ BEGIN
           END IF;
           RETURN jsonb_build_object('id',post.id);
         END IF;
+        -- Check before cache validation as well: a duplicate filtered at ingest
+        -- must report 409 (select another candidate), not an unknown-source 422.
+        IF EXISTS(SELECT 1 FROM public.cf_news_posts p WHERE p.url_key=news.url_key
+          OR public.cf_news_titles_duplicate(p.source,item)) THEN
+          RETURN '{"status":409,"error":"Source already used"}';
+        END IF;
         -- The cache is authoritative: never persist caller-supplied article text.
         SELECT a.article INTO article FROM public.cf_news_articles a
           WHERE a.url_key=news.url_key AND a.title_key=news.title_key
@@ -237,7 +292,8 @@ BEGIN
             AND a.published_at>=stamp-interval '48 hours' AND a.published_at<=stamp
             AND length(btrim(a.article->>'description'))>0;
         IF NOT FOUND THEN RETURN '{"status":422,"error":"Source must match a fresh cached article"}'; END IF;
-        IF EXISTS(SELECT 1 FROM public.cf_news_posts p WHERE p.url_key=news.url_key OR p.title_key=news.title_key) THEN
+        IF EXISTS(SELECT 1 FROM public.cf_news_posts p WHERE p.url_key=news.url_key OR p.title_key=news.title_key
+          OR public.cf_news_titles_duplicate(p.source,news.article)) THEN
           RETURN '{"status":409,"error":"Source already used"}';
         END IF;
         SELECT count(*) INTO n FROM (
@@ -263,6 +319,10 @@ BEGIN
         RETURN jsonb_build_object('id',p_task_id);
       END IF;
       IF published>=stamp-interval '30 days' THEN
+        IF EXISTS(SELECT 1 FROM public.cf_news_posts p WHERE p.url_key=news.url_key
+            OR public.cf_news_titles_duplicate(p.source,news.article))
+          OR EXISTS(SELECT 1 FROM public.cf_news_articles a WHERE a.published_at>=stamp-interval '30 days'
+            AND public.cf_news_titles_duplicate(a.article,news.article)) THEN CONTINUE; END IF;
         INSERT INTO public.cf_news_articles(id,url_key,title_key,article,published_at)
           VALUES(article_id,url_key,title_key,article,published) ON CONFLICT DO NOTHING;
         IF FOUND THEN inserted:=inserted+1; END IF;
@@ -277,7 +337,8 @@ BEGIN
       SELECT a.article,a.published_at,length(btrim(a.article->>'description')) AS quality FROM public.cf_news_articles a
       WHERE a.published_at>=stamp-interval '48 hours' AND a.published_at<=stamp
         AND length(btrim(a.article->>'description'))>0
-        AND NOT EXISTS(SELECT 1 FROM public.cf_news_posts p WHERE p.url_key=a.url_key OR p.title_key=a.title_key)
+        AND NOT EXISTS(SELECT 1 FROM public.cf_news_posts p WHERE p.url_key=a.url_key OR p.title_key=a.title_key
+          OR public.cf_news_titles_duplicate(p.source,a.article))
       ORDER BY quality DESC,a.published_at DESC,a.id LIMIT 100) q),'[]'));
   END IF;
 

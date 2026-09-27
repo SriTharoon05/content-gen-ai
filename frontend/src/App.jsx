@@ -132,6 +132,7 @@ export default function App() {
       <div className="app">
         <div className="main" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh' }}>
           <p className="muted">Loading dashboard…</p>
+          <BackendSwitch defaultOpen />
         </div>
       </div>
     )
@@ -145,7 +146,7 @@ export default function App() {
             <b>Cannot reach the backend.</b>
             <p style={{ margin: '8px 0 0' }}>{bootError}</p>
           </div>
-          <BackendSwitch />
+          <BackendSwitch defaultOpen />
           <button className="btn primary" style={{ marginTop: 14 }} onClick={loadAll}>Retry</button>
           <p className="muted">For a protected deployment, enter your dashboard admin token and retry.</p>
           <input type="password" placeholder="Admin token" aria-label="Dashboard admin token" onChange={e => setToken(e.target.value)} />

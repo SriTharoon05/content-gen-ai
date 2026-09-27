@@ -52,6 +52,20 @@ class NewsPosterTests(unittest.TestCase):
             outputs.append(output.read_bytes())
         self.assertNotEqual(*outputs)
 
+    def test_hero_area_has_no_badge_on_cover_or_inner(self):
+        Image.new('RGB', (1200, 900), (54, 83, 114)).save(self.root / 'hero.png')
+        for index in (1, 2):
+            with self.subTest(index=index):
+                output = self.root / f'clean-{index}.jpg'
+                poster.render_slide(manifest(index), self.root, output)
+                with Image.open(output) as image:
+                    # On a flat hero, each row is uniform across the former
+                    # badge and surrounding image; allow JPEG rounding noise.
+                    for y in range(135, 190):
+                        row = image.crop((55, y, 400, y + 1))
+                        for low, high in row.getextrema():
+                            self.assertLessEqual(high - low, 3)
+
     def test_maximum_text_and_unicode_fallback(self):
         for index in (1, 2):
             data = manifest(index)
