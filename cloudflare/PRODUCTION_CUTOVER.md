@@ -1,5 +1,12 @@
 # Production cutover checklist
 
+## Latest live acceptance test — 27 September 2026
+
+- Real Cloudflare cron scheduled for 17:10 India time, admitted exactly one news request at 17:10:16.
+- Request `fe04cb454231088706889758ab5710bb`: source selection, uniqueness reservation, copy, per-slide image planning/generation, CircleCI rendering, Cloudinary upload and awaiting-approval completed in **92.171 seconds** from request creation.
+- Final JPEG returned HTTP 200. Original disabled schedule restored immediately after dispatch; no public upload performed.
+- The model chose one slide. This test does not verify multi-slide visual distinctness, Instagram publishing, or the deployed Vercel UI.
+
 ## 1. Repository and database
 
 - Current tested code is on `codex/cloudflare-fresh-generation`, not automatically on `main`.
@@ -69,6 +76,8 @@ https://story-shorts-cloudflare-pilot.storyshort.workers.dev/auth/meta/callback
 ## 5. Vercel
 
 Import the repository, select the chosen production branch, root directory `frontend`, framework Vite, install `npm ci`, build `npm run build`, output `dist`. Existing `frontend/vercel.json` handles SPA rewrites.
+
+Vercel Hobby is restricted to personal, non-commercial use. If this dashboard supports a commercial/monetized operation, verify eligibility or use the appropriate plan: https://vercel.com/docs/plans/hobby . Cloudinary credits cover combined storage, bandwidth and transformations: https://cloudinary.com/documentation/billing_and_plans . Do not promise that every production workload fits free tiers.
 
 Set the nonsecret build variable:
 
