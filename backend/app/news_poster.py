@@ -149,6 +149,33 @@ def _text(draw, text, box, maximum, minimum, bold=False, color=WHITE, highlight=
                 draw.bitmap(crop[:2], layer.crop(crop), fill=YELLOW)
 
 
+def _ink_height(layout):
+    font, lines, step = layout
+    last = font.getbbox(lines[-1][0])
+    return (len(lines) - 1) * step + last[3] - last[1]
+
+
+def _content_layout(slide):
+    """Pack actual ink bounds, not fixed headline slots; anchor above the footer."""
+    cover = slide['index'] == 1
+    minimum_top, bottom, gap = (630 if cover else 570), 1130, 36
+    for reduction in range(0, 25, 2):
+        title_size = max(36, (76 if cover else 66) - reduction)
+        body_size = max(24, 36 - reduction // 2)
+        title = _fit(slide['headline'], (64, 0, 1016, 290), title_size, 36, True)
+        body = _fit(slide['body'], (64, 0, 1016, 420), body_size, 24)
+        title_height, body_height = _ink_height(title), _ink_height(body)
+        top = bottom - title_height - gap - body_height
+        if top >= minimum_top:
+            # Boxes retain line-box height for _fit, but the next block follows ink.
+            return {'top': top, 'body_top': top + title_height + gap,
+                    'title_size': title[0].size, 'body_size': body[0].size,
+                    'title_height': title_height, 'body_height': body_height,
+                    'title_box_height': len(title[1]) * title[2],
+                    'body_box_height': len(body[1]) * body[2]}
+    raise ValueError('text overflow: combined news layout cannot fit')
+
+
 def render_slide(manifest, root: Path, output: Path):
     """Render a validated news_slide to an sRGB JPEG and return dimensions/size."""
     slide = _validate(manifest)
@@ -159,6 +186,8 @@ def render_slide(manifest, root: Path, output: Path):
     if output.resolve() == hero.resolve():
         raise ValueError('output must not overwrite hero.png')
     cover = slide['index'] == 1
+    layout = _content_layout(slide)
+    top = layout['top']
     srgb = ImageCms.ImageCmsProfile(ImageCms.createProfile('sRGB'))
     with Image.open(hero) as source:
         source = ImageOps.exif_transpose(source)
@@ -169,26 +198,25 @@ def render_slide(manifest, root: Path, output: Path):
             base = Image.new('RGB', source.size, (10, 16, 27))
             base.paste(rgb, mask=source.getchannel('A'))
             rgb = base
-        canvas = ImageOps.fit(rgb, (WIDTH, HEIGHT if cover else 610), method=Image.Resampling.LANCZOS)
+        canvas = ImageOps.fit(rgb, (WIDTH, HEIGHT if cover else top + 80), method=Image.Resampling.LANCZOS)
     if not cover:
         full = Image.new('RGB', (WIDTH, HEIGHT), (10, 16, 27))
         full.paste(canvas, (0, 0))
         canvas = full
     gradient = Image.new('RGBA', (1, HEIGHT))
     gradient.putdata([(7, 12, 22, int(max(180 * max(0, 1 - y / 300),
-                       min(255, max(0, (y - (340 if cover else 280)) /
-                                    (430 if cover else 300) * 255)))))
+                       min(255, max(0, (y - (top - 330)) / 390 * 255)))))
                       for y in range(HEIGHT)])
     canvas = Image.alpha_composite(canvas.convert('RGBA'), gradient.resize((WIDTH, HEIGHT)))
     draw = ImageDraw.Draw(canvas)
     _text(draw, slide['brand'], (64, 50, 830, 110), 32, 22, True)
     _text(draw, f"{slide['index']} / {slide['total']}", (850, 50, 1016, 110), 26, 16)
-    top = 670 if cover else 590
     draw.rectangle((64, top - 28, 150, top - 21), fill=YELLOW)
-    _text(draw, slide['headline'], (64, top, 1016, top + 290),
-          76 if cover else 66, 36, True, highlight=slide['highlight'])
-    _text(draw, slide['body'], (64, top + 310, 1016, 1220),
-          32 if cover else 36, 22, highlight=slide['highlight'])
+    _text(draw, slide['headline'], (64, top, 1016, top + layout['title_box_height']),
+          layout['title_size'], layout['title_size'], True, highlight=slide['highlight'])
+    body_top = layout['body_top']
+    _text(draw, slide['body'], (64, body_top, 1016, body_top + layout['body_box_height']),
+          layout['body_size'], layout['body_size'], highlight=slide['highlight'])
     draw.line((64, 1240, 1016, 1240), fill=MUTED, width=1)
     _text(draw, slide['source'], (64, 1260, 650, 1320), 22, 16, color=MUTED)
     _text(draw, slide['published_at'], (690, 1260, 1016, 1320), 22, 16, color=MUTED)

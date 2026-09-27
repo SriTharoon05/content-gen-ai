@@ -85,6 +85,17 @@ class NewsPosterTests(unittest.TestCase):
                 self.assertLessEqual(bounds[2] - min(0, bounds[0]), 952)
                 self.assertLessEqual(bounds[3] - bounds[1], step)
 
+    def test_adaptive_layout_has_consistent_ink_gap_and_footer_clearance(self):
+        for index in (1, 2):
+            for headline in ['Addressing Calf Loss', 'Refiners Boost LPG Output',
+                             'Advocating for Inclusive AI Governance', 'W' * 100]:
+                for body in ['A short factual explanation.', ('A longer factual explanation. ' * 10)[:260]]:
+                    slide = manifest(index)['slide'] | {'headline': headline, 'body': body}
+                    layout = poster._content_layout(slide)
+                    self.assertEqual(layout['body_top'] - layout['top'] - layout['title_height'], 36)
+                    self.assertEqual(layout['body_top'] + layout['body_height'], 1130)
+                    self.assertGreaterEqual(layout['top'], 630 if index == 1 else 570)
+
     def test_validation_and_overflow_leave_output_untouched(self):
         changes = [('headline', 'x' * 101), ('body', 'x' * 261), ('brand', 'x' * 36),
                    ('source', 'x' * 61), ('headline', ''), ('body', None),
