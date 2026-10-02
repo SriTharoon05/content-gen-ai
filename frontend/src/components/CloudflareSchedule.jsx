@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
 import { cloudflareRequest, postCloudflare } from '../cloudflareApi'
 import { Field, Num, Select, Toggle, Chips } from './ui'
+import {useDraftGuard} from '../cloudflareHooks'
 
-export default function CloudflareSchedule({ channels }) {
+export default function CloudflareSchedule({ channels,onDirty }) {
   const [saved, setSaved] = useState(null), [draft, setDraft] = useState(null), [error, setError] = useState(''), [busy, setBusy] = useState(false), [notice, setNotice] = useState('')
+  useDraftGuard(!!saved&&JSON.stringify(saved)!==JSON.stringify(draft),onDirty)
   const load = async () => { try { const d = await cloudflareRequest('/schedule'); setSaved(d); setDraft(d); setError('') } catch (e) { setError(e.message) } }
   useEffect(() => { load() }, [])
   const set = patch => { setDraft(d => ({ ...d, schedule: { ...d.schedule, ...patch } })); setNotice('') }

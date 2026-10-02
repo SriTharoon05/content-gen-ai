@@ -6,6 +6,9 @@
 .cf-panel > .card { margin-bottom: 20px; }
 .cf-workspace .card h3 { font-size: 18px; font-weight: 700; }
 .cf-workspace .lbl { font-size: 15px; font-weight: 650; }
+.cf-workspace .field small { font-size: 13px; line-height: 1.55; color: var(--muted); }
+.cf-workspace input[readonly], .cf-workspace textarea[readonly] { font-weight: 550; }
+.cf-workspace button:focus-visible, .cf-workspace summary:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
 .cf-workspace input, .cf-workspace select, .cf-workspace textarea { font-size: 15px; color: var(--text); }
 .cf-workspace textarea { min-height: 120px; line-height: 1.65; }
 .cf-workspace .channel-direction-panel textarea { min-height: 230px; }

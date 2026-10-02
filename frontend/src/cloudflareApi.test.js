@@ -2,9 +2,9 @@ import {test} from 'node:test'
 import assert from 'node:assert/strict'
 import {cloudflareRequest,postCloudflare,publicationLocked,musicCropValid,safeMediaUrl} from './cloudflareApi.js'
 
-test('publication controls block ambiguous, active and completed uploads',()=>{
-  for(const status of ['uncertain','uploading','pending','published'])assert.equal(publicationLocked(status),true)
-  for(const status of [undefined,'blocked','failed','remote_failed'])assert.equal(publicationLocked(status),false)
+test('publication controls block existing uploads because the API has no reset route',()=>{
+  for(const status of ['uncertain','uploading','pending','published','blocked','failed','remote_failed'])assert.equal(publicationLocked(status),true)
+  for(const status of [undefined,null,''])assert.equal(publicationLocked(status),false)
 })
 test('music crops remain inside source and include at least three seconds',()=>{
   assert.equal(musicCropValid(2,5,20),true)
@@ -31,6 +31,6 @@ test('request uses Cloudflare credential, preserves idempotency header and expos
     globalThis.fetch=async()=>new Response(JSON.stringify({error:'Stale preview'}),{status:409})
     await assert.rejects(cloudflareRequest('/videos/test'),e=>e.status===409&&e.message==='Stale preview')
     globalThis.fetch=async()=>new Response('<html>Unavailable</html>',{status:502})
-    await assert.rejects(cloudflareRequest('/videos/test'),/invalid response/)
+    await assert.rejects(cloudflareRequest('/videos/test'),e=>e.status===502&&e.message.includes('invalid response'))
   }finally{globalThis.fetch=originalFetch;globalThis.localStorage=originalStorage}
 })

@@ -135,6 +135,7 @@ export function Chips({ value = [], onChange, options, max }) {
 
 const STATE_TONE = {
   READY: 'good', AWAITING_APPROVAL: 'warn', FAILED: 'bad', RETRY: 'warn', QUEUED: '',
+  CF_FAILED: 'bad', CF_EDIT_FAILED: 'bad', CF_GENERATING: 'busy', CF_EDITING: 'busy',
 }
 
 export function StatePill({ state }) {

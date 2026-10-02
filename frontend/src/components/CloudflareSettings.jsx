@@ -1,10 +1,13 @@
 import {useEffect,useState} from 'react'
 import {cloudflareRequest} from '../cloudflareApi'
 import {Field,Select,Slider,Toggle,Num,Chips} from './ui'
+import {languageOptions,geminiVoiceOptions} from '../cloudflareDashboard'
+import {useDraftGuard} from '../cloudflareHooks'
 
-export default function CloudflareSettings() {
+export default function CloudflareSettings({onDirty}) {
   const [saved,setSaved]=useState(null),[draft,setDraft]=useState(null),[error,setError]=useState(''),[notice,setNotice]=useState(''),[busy,setBusy]=useState(false),[keys,setKeys]=useState({})
   const [tracks,setTracks]=useState([])
+  useDraftGuard(!!saved&&(JSON.stringify(saved)!==JSON.stringify(draft)||Object.keys(keys).length>0),onDirty)
   const load=async()=>{try{const r=await cloudflareRequest('/settings');setSaved(r.settings);setDraft(r.settings);setError('')}catch(e){setError(e.message)}}
   useEffect(()=>{load();cloudflareRequest('/music').then(r=>setTracks(r.tracks||[])).catch(e=>setError(`Music defaults: ${e.message}`))},[])
   const set=(section,key,value)=>{setDraft(d=>({...d,[section]:{...d[section],[key]:value}}));setNotice('')}
@@ -12,7 +15,7 @@ export default function CloudflareSettings() {
     setBusy(true);setError('');setNotice('')
     try{
       const patch={}
-      for(const section of ['models','voice','video','music','publishing','runtime','pricing','align'])if(JSON.stringify(draft[section])!==JSON.stringify(saved[section]))patch[section]=draft[section]
+      for(const section of ['models','voice','video','music','publishing','runtime','pricing','align','languages'])if(JSON.stringify(draft[section])!==JSON.stringify(saved[section]))patch[section]=draft[section]
       if(Object.keys(keys).length)patch.keys=Object.fromEntries(Object.entries(keys).map(([k,v])=>[k,k==='gemini_audio_paid'?v.trim():v.split(/[\n,]/).map(x=>x.trim()).filter(Boolean)]))
       const result=await cloudflareRequest('/settings',{method:'PUT',body:JSON.stringify({settings:patch})})
       setSaved(result.settings);setDraft(result.settings);setKeys({});setNotice('Settings saved. Existing runs keep their saved inputs; new runs use these defaults.')
@@ -31,7 +34,8 @@ export default function CloudflareSettings() {
       <section className="card"><h3>Narration & captions</h3>
         <Field label="Audio model"><Select value={d.models.tts} onChange={v=>set('models','tts',v)} options={['gemini-2.5-flash-preview-tts','gemini-3.1-flash-tts-preview','gemini-2.5-pro-preview-tts','canopylabs/orpheus-v1-english','canopylabs/orpheus-arabic-saudi'].map(value=>({value,label:value}))}/></Field>
         <Toggle label="Free Gemini TTS first, then Groq" value={d.voice.free_tts_first} onChange={v=>set('voice','free_tts_first',v)}/>
-        <Field label="Gemini default voice"><input value={d.voice.default_voice||''} onChange={e=>set('voice','default_voice',e.target.value)}/></Field>
+        <Field label="Gemini default voice"><Select value={d.voice.default_voice} onChange={v=>set('voice','default_voice',v)} options={geminiVoiceOptions}/></Field>
+        <Field label="Default narration language" hint="Captions are English for every language. Groq TTS fallback supports English and Arabic only."><Select value={d.languages.primary} onChange={v=>set('languages','primary',v)} options={languageOptions}/></Field>
         <Field label="Groq English voice"><Select value={d.voice.groq_voice||'troy'} onChange={v=>set('voice','groq_voice',v)} options={['troy','austin','daniel','autumn','diana','hannah'].map(value=>({value,label:value}))}/></Field>
         <Slider label="Default speech tempo" min={.75} max={1.6} step={.01} value={d.voice.speech_tempo} suffix="×" onChange={v=>set('voice','speech_tempo',v)}/>
         <Field label="Performance direction"><textarea value={d.voice.pace_note||''} onChange={e=>set('voice','pace_note',e.target.value)}/></Field>

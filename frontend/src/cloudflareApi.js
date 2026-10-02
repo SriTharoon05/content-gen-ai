@@ -13,7 +13,11 @@ export async function cloudflareRequest(path, options = {}) {
   })
   const text = await response.text()
   let data
-  try { data = text ? JSON.parse(text) : {} } catch { throw new Error(`Backend returned an invalid response (HTTP ${response.status})`) }
+  try { data = text ? JSON.parse(text) : {} } catch {
+    const error = new Error(`Backend returned an invalid response (HTTP ${response.status})`)
+    error.status = response.status
+    throw error
+  }
   if (!response.ok) {
     const message = data.detail || data.error || `HTTP ${response.status}`
     const error = new Error(typeof message === 'string' ? message : JSON.stringify(message))
@@ -26,8 +30,9 @@ export async function cloudflareRequest(path, options = {}) {
 export const postCloudflare = (path, body = {}, options = {}) => cloudflareRequest(path, { ...options, method: 'POST', body: JSON.stringify(body) })
 
 export function publicationLocked(status) {
-  // An uncertain upload must never become a one-click duplicate upload.
-  return !!status && !['blocked', 'failed', 'remote_failed'].includes(status)
+  // The current API returns an existing publication; it has no retry/reset route.
+  // Failed uploads must not look like a working one-click retry, either.
+  return !!status
 }
 
 export function musicCropValid(start, end, duration) {

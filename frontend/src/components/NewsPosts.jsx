@@ -1,5 +1,6 @@
 import {useCallback,useEffect,useRef,useState} from 'react'
 import {cloudflareRequest,postCloudflare,safeMediaUrl} from '../cloudflareApi'
+import {useDraftGuard,usePolling} from '../cloudflareHooks'
 import './NewsPosts.css'
 
 const defaults={enabled:false,run_at:'09:00',timezone_offset_minutes:330,posts_per_day:10,fetch_budget:6,channel:'',brand:'',categories:[]}
@@ -15,7 +16,7 @@ function Carousel({post}) {
   </div>
 }
 
-export default function NewsPosts({active=true}) {
+export default function NewsPosts({active=true,onDirty}) {
   const [data,setData]=useState(null),[form,setForm]=useState(defaults),[dirty,setDirty]=useState(false)
   const [error,setError]=useState(''),[loadError,setLoadError]=useState(''),[notice,setNotice]=useState(''),[busy,setBusy]=useState('')
   const [pending,setPending]=useState(null),[publishLocks,setPublishLocks]=useState({})
@@ -30,7 +31,9 @@ export default function NewsPosts({active=true}) {
       if(!dirtyRef.current)setForm({...defaults,...result.config})
     }catch(e){if(request===sequence.current)setLoadError(e.message)}
   },[])
-  useEffect(()=>{if(!active)return;load();const timer=setInterval(load,10000);return()=>{clearInterval(timer);sequence.current++}},[load,active])
+  usePolling(load,10000,active)
+  useDraftGuard(dirty||!!pending,active?onDirty:undefined)
+  useEffect(()=>()=>{sequence.current++},[active])
   useEffect(()=>{const guard=e=>{if(dirtyRef.current){e.preventDefault();e.returnValue=''}};window.addEventListener('beforeunload',guard);return()=>window.removeEventListener('beforeunload',guard)},[])
   const update=patch=>{setConfirmation(null);dirtyRef.current=true;setDirty(true);setForm(f=>({...f,...patch}))}
   const act=async(key,operation)=>{
