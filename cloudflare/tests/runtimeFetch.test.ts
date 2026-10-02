@@ -1,10 +1,11 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
+import {URL as NodeURL} from 'node:url';
 import {Miniflare,convertV4MiniflareOptions} from 'miniflare';
 
 test('image fetch options are accepted by the actual Cloudflare runtime',async()=>{
-  const source=readFileSync(new URL('../src/providers.ts',import.meta.url),'utf8');
+  const source=readFileSync(new NodeURL('../src/providers.ts',import.meta.url),'utf8');
   assert.ok(!/redirect\s*:\s*['"]error['"]/.test(source));
   const modes=[...source.matchAll(/redirect\s*:\s*['"]([^'"]+)['"]/g)].map(match=>match[1]);
   assert.ok(modes.length>=2);assert.ok(modes.every(mode=>mode==='manual'));
