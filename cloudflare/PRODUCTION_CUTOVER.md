@@ -1,6 +1,21 @@
 # Production cutover checklist
 
-## Latest live acceptance test — 27 September 2026
+## Current acceptance — 2 October 2026
+
+For the current video audit, fixes, measured cloud limits and acceptance results, see
+[the 2 October production audit](PRODUCTION_AUDIT_2026-10-02.md). Three fresh dashboard-submitted
+videos completed through Cloudflare/Cloudinary/CircleCI without manual intervention in
+7m50s, 7m00s and 7m25s. All remain awaiting approval. This proves generation-to-review,
+not public publishing, factual/editorial acceptance, free CPU-plan compliance or scheduler cutover.
+
+Use review mode for the pilot. The video schedule still belongs to Render; the first shared-owner
+guard transfer, actual production Vercel branch/origin and owner Instagram publication test remain
+rollout actions. Do not disable Render before resolving these. Budget recommendations include
+Cloudinary upload transformations; the 25-credit allowance is not just 25 GB of storage.
+
+## Historical scheduled-news acceptance — 27 September 2026
+
+The older news test below is historical evidence, not proof of the current public-publishing acceptance.
 
 - Real Cloudflare cron scheduled for 17:10 India time, admitted exactly one news request at 17:10:16.
 - Request `fe04cb454231088706889758ab5710bb`: source selection, uniqueness reservation, copy, per-slide image planning/generation, CircleCI rendering, Cloudinary upload and awaiting-approval completed in **92.171 seconds** from request creation.
@@ -99,6 +114,17 @@ Copy the assigned Vercel origin into Worker CORS and redeploy the Worker. Verify
 
 ## Remaining Render dependency
 
-`saveSchedule` in `cloudflare/src/scheduler.ts` checks Render `/health` for the scheduler ownership guard before selecting Cloudflare as video scheduler owner. Do not delete Render or claim complete Render independence until this guard has been deliberately migrated. This does not affect the separate news cron path. Legacy Supabase Storage assets also remain readable; do not delete them during cutover.
+The **first** Cloudflare video-scheduler ownership transfer checks Render `/health` for the shared
+ownership guard. Once `render_guard_verified` is durably recorded, later Cloudflare schedule edits
+do not require Render to be awake. On 2 October the live owner was still `render`, the guard was
+unverified, and the enabled schedule was 10:00 India time / one video on each of five channels.
+No schedule ownership or automatic-publication preference was changed during the audit. Do not
+delete Render before deliberately verifying this transfer and checking a scheduled video run.
+This does not affect the separate news cron path. Legacy Supabase Storage assets also remain
+readable; do not delete them during cutover.
+
+Additional-language variants are not currently supported by the Cloudflare generator. A channel
+can select its primary language, with measured-audio captions translated to English; do not claim
+full parity for generating multiple additional-language versions in one run.
 
 References: [Vercel Vite](https://vercel.com/docs/frameworks/frontend/vite), [Cloudflare cron](https://developers.cloudflare.com/workers/configuration/cron-triggers/), [CircleCI API triggers](https://circleci.com/docs/guides/orchestrate/triggers-overview/).
