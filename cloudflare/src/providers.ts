@@ -253,7 +253,7 @@ export async function image(env:Env,id:string,stage:string,c:any,prompt:string,l
     let r:Response;
     try{
       r=await fetch(saved.endpoint,{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+keys[keyIndex]},
-        body:saved.body_json,signal:AbortSignal.timeout(90000),redirect:'error'});
+        body:saved.body_json,signal:AbortSignal.timeout(90000),redirect:'manual'});
     }catch{
       ambiguous=true;
       if(attempt===IMAGE_PROVIDER_ATTEMPTS-1)throw new Error('Image transport outcome uncertain after three identical requests; original reservation retained');
@@ -279,6 +279,7 @@ export async function image(env:Env,id:string,stage:string,c:any,prompt:string,l
       }
       throw new Error('Image key rejected ('+r.status+'); original reservation retained; no ambiguous key rotation');
     }
+    if(r.status>=300&&r.status<400){await r.body?.cancel();throw new Error('Image provider redirect rejected; credentials were not forwarded');}
     if(!r.ok)throw new Error('Image generation HTTP '+r.status);
     let b:any;
     try{b=await r.json();}catch{
@@ -288,7 +289,7 @@ export async function image(env:Env,id:string,stage:string,c:any,prompt:string,l
     }
     const item=b.data?.[0];let bytes:Uint8Array;
     if(item?.b64_json)bytes=Buffer.from(item.b64_json,'base64');
-    else if(item?.url){const a=await fetch(item.url,{redirect:'error'});if(!a.ok)throw new Error('Generated image download failed');bytes=new Uint8Array(await a.arrayBuffer());}
+    else if(item?.url){const a=await fetch(item.url,{redirect:'manual'});if(!a.ok){await a.body?.cancel();throw new Error('Generated image download failed');}bytes=new Uint8Array(await a.arrayBuffer());}
     else throw new Error('Image provider returned no asset');
     if(bytes.length<2048)throw new Error('Generated image too small');
     const asset=await upload(env,bytes,'image','png','image/png');

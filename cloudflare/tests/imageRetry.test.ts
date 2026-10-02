@@ -69,6 +69,7 @@ test('503 then success reuses exact bytes, deterministic seed and key, records c
   f.response=async(_:any,attempt:number)=>attempt===1?new Response('{}',{status:503,headers:{'Retry-After':'999'}}):result();
   await image(env,id,'image-s001',cfg(),prompt);
   assert.equal(f.provider.length,2);assert.deepEqual(f.provider[0],f.provider[1]);
+  assert.equal(f.provider[0].redirect,'manual');
   const body=JSON.parse(f.provider[0].body),request=f.rows.get('image-s001').detail_json.image_request;
   assert.equal(body.seed,parseInt(hash(JSON.stringify([id,'image-s001',prompt])).slice(0,8),16)&0x7fffffff);
   assert.equal(request.body_json,f.provider[0].body);assert.equal(request.key_fingerprint,hash('first-image-key'));
@@ -181,6 +182,12 @@ test('400/402 are not retried and custom endpoints fail closed',async()=>{
     await assert.rejects(image(env,id,'image-s001',c,prompt),/custom endpoint/);assert.equal(f.provider.length,0);
   });
 });
+
+test('provider redirects are never followed or retried with credentials',async()=>fixture(async f=>{
+  f.response=async()=>new Response(null,{status:302,headers:{Location:'https://untrusted.test/redirect'}});
+  await assert.rejects(image(env,id,'image-s001',cfg(),prompt),/redirect rejected/);
+  assert.equal(f.provider.length,1);assert.equal(f.provider[0].redirect,'manual');assert.deepEqual(f.delays,[]);
+}));
 
 test('408/500/504 use the same bounded request, never another account',async()=>{
   for(const status of [408,500,504])await fixture(async f=>{
