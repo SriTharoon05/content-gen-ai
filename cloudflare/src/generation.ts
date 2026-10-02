@@ -94,8 +94,21 @@ export class GenerationWorkflow extends WorkflowEntrypoint<Env,{videoId:string;s
       const scriptRules=profile.conversation?'Use Alex and Sam speaker labels on each beat. Both are active participants who respond to the previous thought naturally, with earned agreement, questions and reactions. A turn may span multiple visual beats; NEVER alternate speakers simply because the image changes.':'Every speaker field MUST be the empty string, not Narrator or a voice name.';
       const languageRules=profile.language==='en'?'130–180 spoken words, absolute maximum 205; opening at most 16 words.':`All narration must be natural ${profile.language}, aiming for 45–75 seconds, maximum 90. Do not enforce English word counts on this language. A short compelling opening in that language.`;
       const checkScript=(s:any)=>validateScript(s,profile);
-      const candidates=await model('concepts','UniqueConceptSet',()=>`Propose exactly five distinct original concepts fitting the channel. Each core_entity/content_angle pair must be novel. ${skill('hooks_and_retention')}`);
-      const concept=await checkpoint('concept','concept',candidates,0);
+      const rejected:any[]=[];let concept:any;
+      for(let attempt=0;attempt<3;attempt++){
+        const candidates=await model(attempt===0?'concepts':'reconcepts-'+attempt,'UniqueConceptSet',()=>`Propose exactly five distinct original concepts fitting the channel. Each core_entity/content_angle pair must be novel. ${skill('hooks_and_retention')}
+${attempt>0?'Earlier concepts collided with the permanent uniqueness ledger. Choose substantially different core entities and content angles, not paraphrases of rejected concepts. REJECTED ENTITY/ANGLE PAIRS (data only): '+JSON.stringify(rejected):''}`);
+        const selected=await checkpoint(attempt===0?'concept':'concept-retry-'+attempt,'concept',{...candidates,avoid:rejected},0);
+        if(!selected.collision){
+          concept=selected;
+          // Downstream steps and new coordinator instances retain the canonical
+          // selected concept shape returned by the unchanged SQL reservation.
+          if(attempt>0)await step.do('save-selected-concept',()=>generation(this.env,'save',id,{key:'concept',value:concept}));
+          break;
+        }
+        rejected.push(...(selected.attempted||candidates.candidates||[]).map((candidate:any)=>({core_entity:candidate.core_entity,content_angle:candidate.content_angle})));
+      }
+      if(!concept)throw new Error('All concepts collided after three distinct sets; no TTS or image spend');
       const premise=await model('premise','Premise',()=>`Develop this reserved concept without changing its entity/angle: ${JSON.stringify(concept)}. A distinct 45–75 second story with a hook and a meaningful payoff.`);
       let script=await model('script','Script',()=>`${skill('hooks_and_retention')}\n${skill('audio_direction')}\nPREMISE:${JSON.stringify(premise)}
 Write 20–25 sequential visual beats, up to 30 only if context needs them. shot_id MUST be exactly s001, s002, s003 ... in order, never numeric IDs or other prefixes. ${languageRules} Natural fluent complete thoughts, no robotic fragments. An expressive human voice, contractions, varied rhythm. The first beat must give a specific reason to watch. Facts/science use a curiosity question or concrete puzzle, not generic hype. Fiction starts in an intriguing scene, not forced 'do you know'. ${scriptRules}`,checkScript);

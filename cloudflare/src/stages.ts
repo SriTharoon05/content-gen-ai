@@ -15,6 +15,24 @@ export function imageBatchConcurrency(c:any){
   const ownerLimit=[1,2,3].includes(requested)?requested:3;
   return Math.min(ownerLimit,(c.settings.keys?.pollinations?.length??0)>1?2:3);
 }
+const conceptPair=(value:any)=>[value.core_entity,value.content_angle].map(x=>String(x||'').trim().toLowerCase().replace(/\s+/g,' ')).join('\n');
+export async function reserveConceptSet(env:Env,id:string,data:any,c:any,embed=embedding){
+  if(!Array.isArray(data.candidates)||data.candidates.length!==5)throw new Error('Concept selection requires exactly five candidates');
+  const rejected=new Set((data.avoid||[]).map(conceptPair));
+  const attempted:any[]=[];
+  // One child performs at most five independent-key embedding sweeps and five
+  // unchanged pgvector reservations: 25+5+status/config/save =33 requests.
+  const embeddingConfig={...c,settings:{...c.settings,keys:{...c.settings.keys,gemini_free:(c.settings.keys?.gemini_free||[]).slice(0,5)}}};
+  for(const candidate of data.candidates){
+    const pair={core_entity:candidate.core_entity,content_angle:candidate.content_angle};attempted.push(pair);
+    if(rejected.has(conceptPair(candidate)))continue;
+    rejected.add(conceptPair(candidate));
+    const vector=await embed(embeddingConfig,candidate.core_concept);
+    const result=await generation(env,'reserve',id,{...candidate,embedding:vector});
+    if(!result.collision)return result;
+  }
+  return {collision:true,attempted};
+}
 export async function generateImageBatch(env:Env,id:string,shots:ImageBatchShot[],state:any,c:any,requestImage:ImageRequest=image){
   if(!Array.isArray(shots)||shots.length<1||shots.length>3||new Set(shots.map(s=>s.shot_id)).size!==shots.length||shots.some(s=>!/^s\d{3}$/.test(s.shot_id)||typeof s.prompt!=='string'||!s.prompt.trim()))throw new Error('Image batch requires one to three distinct scene IDs and prompts');
   const outcomes=await Promise.allSettled(shots.map(async shot=>{
@@ -61,13 +79,13 @@ export async function runStage(env:Env,step:WorkflowStep,id:string,p:StageParams
     throw error;
   }
 }
-function context(c:any) {
+export function context(c:any,schema?:string) {
   const channel=c.channel;
   return `CHANNEL:${channel.name}. NICHE:${channel.niche}\nOWNER INSTRUCTIONS:${channel.strategy_json?.instructions??(contract.skills as any)['brand/'+channel.slug+'.md']??''}
 STRATEGY:${JSON.stringify(channel.strategy_json)}\nOPTIONS:${JSON.stringify(channel.overrides_json)}
 REQUESTED TOPIC:${JSON.stringify(c.options?.topic||'Choose an original topic within the niche')}
 Original model-generated content. External fact checking disabled. Do not invent studies, current news, statistics or real-person quotes. Clearly frame fiction/speculation.
-PRIOR CONCEPTS:${JSON.stringify(c.prior.slice(0,30))}`;
+${schema==='UniqueConceptSet'?'PRIOR CONCEPTS:'+JSON.stringify(c.prior.slice(0,30)):''}`;
 }
 export class GenerationStageWorkflow extends WorkflowEntrypoint<Env,StageParams> {
   async run(event:WorkflowEvent<StageParams>,step:WorkflowStep) {
@@ -116,11 +134,11 @@ export class GenerationStageWorkflow extends WorkflowEntrypoint<Env,StageParams>
         if(op==='model'){
           const schema=(contract.schemas as any)[data.schema];
           if(data.schema==='Script') {
-            value=await scriptWithRepair(c,context(c)+'\n'+data.prompt,schema,
+            value=await scriptWithRepair(c,context(c,data.schema)+'\n'+data.prompt,schema,
               state.steps[name+'-validation'],textModel,s=>validateScript(s,generationProfile(c)),
               value=>generation(this.env,'save',id,{key:name+'-validation',value}));
           } else {
-            value=await textModel(c,context(c)+'\n'+data.prompt,schema);validateSchema(value,schema);
+            value=await textModel(c,context(c,data.schema)+'\n'+data.prompt,schema);validateSchema(value,schema);
           }
           if(data.schema==='VoiceDirection'&&value.multi_speaker!==generationProfile(c).conversation)throw new Error('Voice configuration differs from channel');
           if(['VisualPlan','EditPlan'].includes(data.schema)){
@@ -130,9 +148,7 @@ export class GenerationStageWorkflow extends WorkflowEntrypoint<Env,StageParams>
             if(value.transitions?.every((x:any)=>['hard_cut','match_cut'].includes(x.kind)))throw new Error('Missing contextual blends');
           }
         } else if(op==='concept'){
-          for(const candidate of data.candidates){const vector=await embedding(c,candidate.core_concept);
-            const r=await generation(this.env,'reserve',id,{...candidate,embedding:vector});if(!r.collision){value=r;break;}}
-          if(!value)throw new Error('All concepts collided; no media spend');
+          value=await reserveConceptSet(this.env,id,data,c);
         } else if(op==='gemini-audio'){
           const a=await geminiSpeech(this.env,c,data.plain,data.direction,data.conversation===true);value=a?[a]:[];
         } else if(op==='groq-audio')value=await groqSpeech(this.env,c,data.text,data.speaker);
