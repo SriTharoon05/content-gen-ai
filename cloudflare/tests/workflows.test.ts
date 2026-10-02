@@ -145,7 +145,7 @@ test('coordinator checkpoints exactly eight new stages then continues durably',a
     assert.equal(continuations[0].params.segment,1);assert.ok(external<10);
     assert.equal(children.filter(c=>c.params.op==='image-batch').length,7);
     assert.deepEqual(children.filter(c=>c.params.op==='image-batch').map(c=>c.params.data.shots.length),[3,3,3,3,3,3,2]);
-    assert.deepEqual(children.filter(c=>c.params.op==='image-batch').map(c=>c.params.retries),[1,1,1,1,1,1,2]);
+    assert.deepEqual(children.filter(c=>c.params.op==='image-batch').map(c=>c.params.retries),[0,0,0,0,0,0,0]);
     assert.equal(children[7].params.data.schema,'PublishCopy');
   } finally{globalThis.fetch=original;}
 });
@@ -172,6 +172,7 @@ test('generation refuses TTS when writer risks survive both revisions despite po
       assert.match(child.params.data.prompt,/FINAL NARRATION SELF-CHECK/);
       assert.match(child.params.data.prompt,/Never clear an entry while its assertion remains factual/);
     }
+    for(const child of children.filter(c=>c.params.data.schema==='QAFinding'))assertMechanismReview(child.params.data.prompt);
   }finally{globalThis.fetch=original;}
 });
 test('writer excludes audio skill while the later director retains it and reviews actual corrected narration',async()=>{
@@ -203,5 +204,44 @@ test('writer excludes audio skill while the later director retains it and review
     assert.match(writer,/no square-bracket audio tags or stage directions/);
     assert.match(review,/Removing unsupported details or speculative applications is allowed/);
     assert.match(review,/Inspect actual final narration, not just an empty flagged_claims list/);
+    assertMechanismReview(review);
   }finally{globalThis.fetch=original;}
 });
+function assertMechanismReview(prompt:string){
+  assert.match(prompt,/Review the actual causal explanation/);
+  assert.match(prompt,/competing or condition-dependent explanation as a universal established cause/);
+  assert.match(prompt,/imply consensus where the mechanism remains uncertain/);
+  assert.match(prompt,/FAIL conflation of distinct technical terms, mechanisms or observation conditions/);
+  assert.match(prompt,/do not invent evidence, sources or an alternative definitive mechanism/);
+  assert.match(prompt,/editorial model review, not an external fact check or a topic ban/);
+}
+for(const finding of ['A competing mechanism is presented as universal scientific consensus.','Two related but distinct technical mechanisms are conflated.']){
+  test('mechanism review failure stays blocked with empty flags: '+finding,async()=>{
+    const beats=Array.from({length:25},(_,i)=>({shot_id:'s'+String(i+1).padStart(3,'0'),speaker:'',narration:i===0?'Why does this familiar process surprise us every day?':'the familiar process continues across another image',emphasis_words:[]}));
+    const script={hook_kind:'question',hook:beats[0].narration,beats,flagged_claims:[]};
+    const saved={profile:{language:'en',conversation:false,options:{}},'default-bgm':{music:null},concepts:{},concept:{core_entity:'Known phenomenon',content_angle:'Mechanism explanation'},premise:{},script};
+    const original=globalThis.fetch;const children:any[]=[];let failure='';
+    globalThis.fetch=async(_url,init)=>{
+      const p=JSON.parse(String(init?.body));
+      if(p.p_action==='status')return Response.json({steps:saved});
+      if(p.p_action==='fail'){failure=p.p_payload.error;return Response.json({ok:true});}
+      throw new Error('Must not approve script, start TTS or buy media');
+    };
+    const env={SUPABASE_URL:'https://database.test',SUPABASE_KEY:'fixture',GENERATION_STAGE:{create:async(p:any)=>{children.push(p);}}};
+    const runner:any=step();runner.waitForEvent=async()=>{
+      const p=children.at(-1).params;
+      if(p.data.schema==='QAFinding'){
+        assertMechanismReview(p.data.prompt);
+        return {payload:{ok:true,value:{passed:false,findings:[finding]}}};
+      }
+      assert.equal(p.data.schema,'Script');assert.ok(p.data.prompt.includes(finding));
+      return {payload:{ok:true,value:script}};
+    };
+    try{
+      await assert.rejects(new GenerationWorkflow({},env).run({instanceId:'fixture',payload:{videoId:'a'.repeat(32)}},runner),/Editorial QA failed after two revisions/);
+      assert.match(failure,/Editorial QA failed/);
+      assert.deepEqual(children.map(c=>c.params.name),['qa','revision-0','review-0','revision-1','review-1']);
+      assert.ok(children.every(c=>c.params.op==='model'));
+    }finally{globalThis.fetch=original;}
+  });
+}

@@ -97,7 +97,9 @@ export class GenerationStageWorkflow extends WorkflowEntrypoint<Env,StageParams>
       await(await binding.get(p.parentId)).sendEvent({type:'stage-'+p.name,payload});
     };
     try {
-    const value=await step.do('execute',{retries:{limit:p.retries,delay:'30 seconds',backoff:'exponential'},timeout:'15 minutes'},async()=>{
+    // image() owns its bounded stable-request retry loop. Re-running a whole
+    // batch would accumulate external requests beyond a Free Workflow instance.
+    const value=await step.do('execute',{retries:{limit:['image','image-batch'].includes(p.op)?0:p.retries,delay:'30 seconds',backoff:'exponential'},timeout:'15 minutes'},async()=>{
       const {videoId:id,name,op,data}=p;
       // These child stages each get their own Free-plan external-subrequest budget.
       if(op==='media-inspect'){await expire(this.env,id);const t=await loadTask(this.env,id);return {status:t.status,result:t.result_json,pipelineId:t.pipeline_id||''};}

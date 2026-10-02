@@ -101,6 +101,17 @@ BEGIN
     k:=p_payload->>'key';
     SELECT to_jsonb(pc) INTO data FROM public.provider_calls pc WHERE idempotency_key='cf:'||p_task_id||':'||k;
     IF data IS NOT NULL THEN RETURN data; END IF;
+    -- Exact request bytes and key fingerprint, never a provider secret. The
+    -- request timestamp and reservation timestamp are the same transaction time.
+    opts:=p_payload->'request';
+    IF opts IS NULL OR opts->>'version' IS DISTINCT FROM '1'
+      OR opts->>'endpoint' IS DISTINCT FROM 'https://gen.pollinations.ai/v1/images/generations'
+      OR jsonb_typeof(opts->'body_json') IS DISTINCT FROM 'string'
+      OR coalesce(opts->>'request_hash','') !~ '^[a-f0-9]{64}$'
+      OR coalesce(opts->>'key_fingerprint','') !~ '^[a-f0-9]{64}$'
+      OR jsonb_typeof(opts->'seed') IS DISTINCT FROM 'number'
+    THEN RETURN '{"error":"Versioned stable Pollinations request metadata required","status":422}'::jsonb; END IF;
+    opts:=opts||jsonb_build_object('started_at',now(),'auth_rotations',0);
     -- Serialize all new Cloudflare reservations across channels and manual/scheduled jobs.
     PERFORM pg_advisory_xact_lock(hashtext('story-shorts:provider-credit-budget'));
     cost:=coalesce((p_payload->>'credits')::numeric,0);
@@ -116,11 +127,34 @@ BEGIN
       THEN RETURN '{"error":"Scheduled daily image credit ceiling reached; no purchase attempted","status":409}'::jsonb; END IF;
     END IF;
     INSERT INTO public.provider_calls(id,video_id,idempotency_key,provider,model,status,credits,usd,units,detail_json,created_at)
-    VALUES(replace(gen_random_uuid()::text,'-',''),p_task_id,'cf:'||p_task_id||':'||k,p_payload->>'provider',p_payload->>'model','reserved',coalesce((p_payload->>'credits')::float,0),0,1,'{}',now());
-    RETURN '{"new":true}'::jsonb;
+    VALUES(replace(gen_random_uuid()::text,'-',''),p_task_id,'cf:'||p_task_id||':'||k,p_payload->>'provider',p_payload->>'model','reserved',coalesce((p_payload->>'credits')::float,0),0,1,jsonb_build_object('image_request',opts),now())
+    RETURNING to_jsonb(provider_calls) INTO data;
+    RETURN data||'{"new":true}'::jsonb;
+  ELSIF p_action='call_rekey' THEN
+    -- Caller may use this only after a definitive 401/403 on a new reservation;
+    -- replay callers never rekey. Compare-and-set before sending the next request.
+    UPDATE public.provider_calls SET detail_json=jsonb_set(detail_json::jsonb,'{image_request}',
+      (detail_json::jsonb->'image_request')||jsonb_build_object('key_fingerprint',p_payload->>'key_fingerprint',
+        'auth_rotations',coalesce((detail_json::jsonb->'image_request'->>'auth_rotations')::integer,0)+1))
+    WHERE idempotency_key='cf:'||p_task_id||':'||(p_payload->>'key') AND status='reserved'
+      AND detail_json::jsonb->'image_request'->>'version'='1'
+      AND detail_json::jsonb->'image_request'->>'request_hash'=p_payload->>'request_hash'
+      AND detail_json::jsonb->'image_request'->>'key_fingerprint'=p_payload->>'expected_fingerprint'
+      AND coalesce((detail_json::jsonb->'image_request'->>'auth_rotations')::integer,0)<2
+      AND created_at>now()-interval '15 minutes'
+      AND p_payload->>'auth_status' IN ('401','403')
+      AND coalesce(p_payload->>'key_fingerprint','') ~ '^[a-f0-9]{64}$'
+    RETURNING to_jsonb(provider_calls) INTO data;
+    IF data IS NULL THEN RETURN '{"error":"Image key transition conflict; no new request allowed","status":409}'::jsonb; END IF;
+    RETURN data;
   ELSIF p_action='call_finish' THEN
-    UPDATE public.provider_calls SET status='settled',detail_json=p_payload->'value'
-    WHERE idempotency_key='cf:'||p_task_id||':'||(p_payload->>'key');
+    UPDATE public.provider_calls SET status='settled',detail_json=CASE WHEN detail_json::jsonb ? 'image_request'
+      THEN detail_json::jsonb||jsonb_build_object('asset',p_payload->'value','provider_response',
+        jsonb_build_object('cache_status',p_payload->>'cache_status','provider_attempts',p_payload->'provider_attempts'))
+      ELSE p_payload->'value' END
+    WHERE idempotency_key='cf:'||p_task_id||':'||(p_payload->>'key')
+      AND (NOT (detail_json::jsonb ? 'image_request') OR detail_json::jsonb->'image_request'->>'request_hash'=p_payload->>'request_hash');
+    IF NOT FOUND THEN RETURN '{"error":"Image settlement request conflict","status":409}'::jsonb; END IF;
     RETURN '{"ok":true}'::jsonb;
   ELSIF p_action='complete' THEN
     IF v.state IN ('AWAITING_APPROVAL','READY','PUBLISHED','PUBLISHING') THEN RETURN jsonb_build_object('ok',true,'state',v.state,'publish_ready',coalesce((v.options_json->>'cf_publish_ready')::boolean,false)); END IF;

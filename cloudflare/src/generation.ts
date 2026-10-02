@@ -50,9 +50,23 @@ export function validateScript(s:any,profile={language:'en',conversation:false})
   if(s.beats.some((b:any)=>!b.narration.trim()))throw new Error('Empty spoken scene');
   const hookWords=s.beats[0].narration.trim().split(/\s+/).length;
   if(profile.language==='en'&&hookWords>16)throw new Error(`Opening must be at most 16 words; received ${hookWords}`);
+  if(profile.language==='en'){
+    // Inspect spoken sentences, not visual beats: one fluent sentence may span
+    // several image cuts. Sentence segmentation also avoids splitting decimals.
+    const narration=s.beats.map((b:any)=>b.narration.trim()).join(' ');
+    let brief:string[]=[];
+    for(const {segment} of new Intl.Segmenter('en',{granularity:'sentence'}).segment(narration)){
+      const words=segment.match(/\p{L}+(?:['’\u2011-]\p{L}+)*|\p{N}+(?:[.,]\p{N}+)*/gu)||[];
+      if(!words.length)continue;
+      if(words.length>4){brief=[];continue;}
+      brief.push(segment.trim());
+      if(brief.length===3)throw new Error('$.beats: English fluency guard: three consecutive sentences or telegraphic fragments contain at most 4 words each: '+JSON.stringify(brief)+'. Rewrite this sequence as connected, substantive narration, preserving the meaning and 130–205 total words. A fluent sentence may span scene cuts; isolated natural replies such as "Yeah, exactly." followed by a substantive sentence are allowed. Do not pad, repeat or invent facts to meet the word count.');
+    }
+  }
 }
 const skill=(name:string)=>(contract.skills as Record<string,string>)[name+'.md']||'';
 const groundedConceptRules='For factual channels, build curiosity around an ordinary established explanatory mechanism, documented historical context or grounded causal puzzle. Do not invent breakthroughs, experimental improvements, precise numbers, studies, institutions or current events to make a concept exciting. Frontier applications must explicitly remain future, noncurrent and unproven, not available technology. For fiction channels, imaginative events must be clearly fictional, never claimed historical or scientific evidence.';
+const mechanismReviewRules='MECHANISM REVIEW: Review the actual causal explanation, not just fluency or engagement. Distinguish the observed phenomenon from a proposed mechanism and from scientific consensus. FAIL claims that treat a contested, competing or condition-dependent explanation as a universal established cause, or imply consensus where the mechanism remains uncertain. FAIL conflation of distinct technical terms, mechanisms or observation conditions, even when those terms are related. Identify the exact claim and require an accurately limited explanation, explicit uncertainty or deletion; do not invent evidence, sources or an alternative definitive mechanism. Ordinary established explanatory facts need no blanket warning, and an empty flagged_claims list is not proof of accuracy. This is editorial model review, not an external fact check or a topic ban.';
 
 class Continued extends Error {}
 export class GenerationWorkflow extends WorkflowEntrypoint<Env,{videoId:string;segment?:number;runKey?:string}> {
@@ -94,7 +108,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<Env,{videoId:string;s
       // Resolve owner defaults before any paid image spend; missing/unregistered music
       // should fail early instead of wasting an otherwise completed production.
       const bgm=await checkpoint('default-bgm','default-bgm');
-      const scriptRules=profile.conversation?'Use Alex and Sam speaker labels on each beat. Both are active participants who respond to the previous thought naturally, with earned agreement, questions and reactions. A turn may span multiple visual beats; NEVER alternate speakers simply because the image changes.':'Every speaker field MUST be the empty string, not Narrator or a voice name.';
+      const scriptRules=profile.conversation?'Use Alex and Sam speaker labels on each beat. Both are active participants who respond to the previous thought naturally, with earned agreement, questions and reactions. Often develop 2–3 connected sentences in a substantive turn, while allowing isolated brief natural reactions; this is not a fixed turn or sentence count. A turn may span multiple visual beats; NEVER alternate speakers simply because the image changes or speak alternating word confetti.':'Every speaker field MUST be the empty string, not Narrator or a voice name.';
       const languageRules=profile.language==='en'?'130–180 spoken words, absolute maximum 205; opening at most 16 words.':`All narration must be natural ${profile.language}, aiming for 45–75 seconds, maximum 90. Do not enforce English word counts on this language. A short compelling opening in that language.`;
       const checkScript=(s:any)=>validateScript(s,profile);
       const rejected:any[]=[];let concept:any;
@@ -115,11 +129,11 @@ ${attempt>0?'Earlier concepts collided with the permanent uniqueness ledger. Cho
       const premise=await model('premise','Premise',()=>`Develop this reserved concept preserving its entity/angle: ${JSON.stringify(concept)}. The reserved core_concept is a creative proposal, NOT evidence. Remove invented details, studies or speculative practical applications while retaining the original entity/angle; explain the established mechanism instead. ${groundedConceptRules} A distinct 45–75 second story with a hook and a meaningful payoff.`);
       let script=await model('script','Script',()=>`${skill('hooks_and_retention')}\nRESERVED CONCEPT:${JSON.stringify(concept)}\nPREMISE:${JSON.stringify(premise)}
 Write 20–25 sequential visual beats, up to 30 only if context needs them. shot_id MUST be exactly s001, s002, s003 ... in order, never numeric IDs or other prefixes. ${languageRules} Natural fluent complete thoughts across image cuts, no robotic fragments or rigid word quotas per image. An expressive human voice, contractions, varied rhythm. The first beat must be a complete self-contained engaging hook that gives a specific reason to watch, not the first fragment of a sentence. Facts/science use a curiosity question or concrete puzzle, not generic hype. Fiction starts in an intriguing scene, not forced 'do you know'. ${scriptRules} ${FINAL_NARRATION_RULES}`,checkScript);
-      let qa=await model('qa','QAFinding',()=>`${skill('qa_rules')}\nRESERVED CONCEPT:${JSON.stringify(concept)}\nPREMISE:${JSON.stringify(premise)}\nReview this script for meaningful payoff, fluent connected sentences (not isolated robotic bullet points), channel fit, safe factual framing and a complete engaging opening hook. Fail if it changes the reserved entity/angle or invents historical events, evidence, dates, scientific confirmation or institutions without explicitly framing them as fiction. Removing unsupported details or speculative applications is allowed and is NOT a change of entity/angle. The creative concept, premise and examples in channel instructions are not evidence. Inspect actual final narration, not just an empty flagged_claims list. SCRIPT:${JSON.stringify(script)}`);
+      let qa=await model('qa','QAFinding',()=>`${skill('qa_rules')}\n${mechanismReviewRules}\nRESERVED CONCEPT:${JSON.stringify(concept)}\nPREMISE:${JSON.stringify(premise)}\nReview this script for meaningful payoff, fluent connected sentences (not isolated robotic bullet points), channel fit, safe factual framing and a complete engaging opening hook. Fail if it changes the reserved entity/angle or invents historical events, evidence, dates, scientific confirmation or institutions without explicitly framing them as fiction. Removing unsupported details or speculative applications is allowed and is NOT a change of entity/angle. The creative concept, premise and examples in channel instructions are not evidence. Inspect actual final narration, not just an empty flagged_claims list. SCRIPT:${JSON.stringify(script)}`);
       qa=enforceFactualReview(script,qa);
       for(let r=0;!qa.passed&&r<2;r++){
         script=await model('revision-'+r,'Script',()=>`${skill('hooks_and_retention')}\nRESERVED CONCEPT:${JSON.stringify(concept)}\nRevise ${JSON.stringify(script)} using ${JSON.stringify(qa.findings)}. Preserve only the reserved entity/angle, not inaccurate details from old drafts. Delete invented studies, institutions, precise improvements and speculative applications; do not propagate them merely because they appeared in the premise. Explain the established mechanism instead. Keep 20–30 beats, sequential IDs, a complete self-contained first hook and flexible later beat lengths with fluent sentences across cuts. ${languageRules} ${scriptRules} ${FINAL_NARRATION_RULES}`,checkScript);
-        qa=await model('review-'+r,'QAFinding',()=>`${skill('qa_rules')}\nRESERVED CONCEPT:${JSON.stringify(concept)}\nPREMISE:${JSON.stringify(premise)}\nFail if the revised script changes the reserved entity/angle, uses robotic fragments, or presents invented evidence/history/scientific confirmations as fact. Removing an inaccurate study, speculative application or invented improvement while preserving the entity/angle is allowed. The creative concept and premise are NOT evidence. Review actual final narration even if flagged_claims is empty; corrected flags are not a historical warning log. Review revised script: ${JSON.stringify(script)}`);
+        qa=await model('review-'+r,'QAFinding',()=>`${skill('qa_rules')}\n${mechanismReviewRules}\nRESERVED CONCEPT:${JSON.stringify(concept)}\nPREMISE:${JSON.stringify(premise)}\nFail if the revised script changes the reserved entity/angle, uses robotic fragments, or presents invented evidence/history/scientific confirmations as fact. Removing an inaccurate study, speculative application or invented improvement while preserving the entity/angle is allowed. The creative concept and premise are NOT evidence. Review actual final narration even if flagged_claims is empty; corrected flags are not a historical warning log. Review revised script: ${JSON.stringify(script)}`);
         qa=enforceFactualReview(script,qa);
       }
       if(!qa.passed)throw new Error('Editorial QA failed after two revisions');
@@ -172,9 +186,10 @@ Write 20–25 sequential visual beats, up to 30 only if context needs them. shot
           // Each bounded batch is one new coordinator stage, not one per image.
           // Its child persists every individual image before saving this batch.
           const name='image-batch-'+pending.map((shot:any)=>shot.shot_id).join('-');
-          // Three single-key images: <=39 requests initially and <=10 on one
-          // recovery retry. Two multi-key images: <=33 + 7 + 7 requests.
-          const assets=await checkpoint(name,'image-batch',{shots:pending.map((shot:any)=>({shot_id:shot.shot_id,prompt:shot.image_prompt+'\n'+visuals.style_block}))},pending.length===3?1:2);
+          // image() owns at most three identical seeded provider attempts and
+          // a cumulative six-permit budget per image. Never retry the whole
+          // child batch: its cumulative Free-plan budget is below 50 requests.
+          const assets=await checkpoint(name,'image-batch',{shots:pending.map((shot:any)=>({shot_id:shot.shot_id,prompt:shot.image_prompt+'\n'+visuals.style_block}))},0);
           for(const item of assets)recovered.set(item.shot_id,item.asset);
         }
         for(const shot of batch){

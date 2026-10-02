@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {scriptWithRepair} from '../src/scriptRepair';
+import {FINAL_NARRATION_RULES,scriptWithRepair} from '../src/scriptRepair';
 import contract from '../src/contract.json';
 
 const config={settings:{keys:{gemini_free:['fake-gemini'],groq:['fake-groq']}}};
@@ -59,4 +59,22 @@ test('repair may delete unsupported old premise details while preserving reserve
     assert.match(p,/speculative\s+applications rather than carrying them forward/);
     return {beats:Array(25).fill({})};
   },validate,async()=>{});
+});
+test('writer and repair format explicitly prevent choppy English tails without rigid visual or speaker quotas',async()=>{
+  assert.match(FINAL_NARRATION_RULES,/especially the final third/);
+  assert.match(FINAL_NARRATION_RULES,/three consecutive sentences or telegraphic fragments of at most 4 words each/);
+  assert.match(FINAL_NARRATION_RULES,/sentence-level rule, NOT a word quota for each image/);
+  assert.match(FINAL_NARRATION_RULES,/compete or effects depend on conditions/);
+  assert.match(FINAL_NARRATION_RULES,/Do not conflate distinct technical terms/);
+  const duo={...config,channel:{strategy_json:{conversation:true}}};
+  await scriptWithRepair(duo,'writer prompt',{},null,async(_c,p)=>{
+    const format=p.slice(p.indexOf('OUTPUT FORMAT'),p.indexOf('FINAL NARRATION SELF-CHECK'));
+    assert.match(format,/three consecutive sentences\/fragments of at most 4 words each in the joined narration/);
+    assert.match(format,/concluding explanation naturally/);
+    assert.match(format,/isolated brief reply followed by a substantive sentence is fine/);
+    assert.match(p,/2–3 connected sentences in a substantive turn spanning multiple images/);
+    assert.match(p,/No fixed turn count/);
+    assert.match(p,/do not alternate speakers simply because an image changes/);
+    return {beats:Array(25).fill({})};
+  },validate,async()=>{throw new Error('No invalid output');});
 });

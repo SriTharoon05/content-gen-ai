@@ -1,5 +1,6 @@
 """Install/test the additive pilot RPC using backend/.env. Default is rollback-only."""
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -84,17 +85,34 @@ def main():
                 assert gen('status',fresh)['state']=='CF_GENERATING'
                 assert connection.execute(text('SELECT status FROM jobs WHERE id=:id'),{'id':fresh}).scalar_one()=='cf_generating'
                 original_balance=connection.execute(text("SELECT value_json::jsonb->'pricing'->'credit_balance' FROM app_settings WHERE key='runtime'")).scalar_one()
+                # Non-secret stable-request fixture: installer never calls a provider.
+                image_endpoint='https://gen.pollinations.ai/v1/images/generations'
+                image_body=json.dumps({'model':'test','prompt':'Rollback-only image fixture','size':'1024x1024','n':1,'response_format':'url','seed':7},separators=(',',':'))
+                image_request={'version':1,'endpoint':image_endpoint,'body_json':image_body,'seed':7,
+                    'request_hash':hashlib.sha256(json.dumps([image_endpoint,image_body],separators=(',',':')).encode()).hexdigest(),
+                    'key_fingerprint':hashlib.sha256(b'non-secret-fixture').hexdigest()}
+                image_call={'key':'image','provider':'pollinations','model':'test','credits':.001,'request':image_request}
                 connection.execute(text("UPDATE app_settings SET value_json=jsonb_set(value_json::jsonb,'{pricing,credit_balance}','0') WHERE key='runtime'"))
-                assert gen('call_start',fresh,{'key':'budget-refused','provider':'pollinations','model':'test','credits':.001})['status']==409
+                assert gen('call_start',fresh,{**image_call,'key':'budget-refused'})['status']==409
                 connection.execute(text("UPDATE app_settings SET value_json=jsonb_set(value_json::jsonb,'{pricing,credit_balance}',CAST(:balance AS jsonb)) WHERE key='runtime'"),{'balance':json.dumps(original_balance)})
                 concept={'core_entity':'cf-fixture-'+fresh,'content_angle':'test-angle','core_concept':'Test fixture is rolled back, never used for generation.', 'embedding':json.dumps([1.0]+[0.0]*767)}
                 reserved=gen('reserve',fresh,concept)
                 assert reserved['video_id']==fresh
                 assert gen('reserve',fresh,concept)['id']==reserved['id']
-                assert gen('call_start',fresh,{'key':'image','provider':'pollinations','model':'test','credits':.001})['new']
-                assert gen('call_start',fresh,{'key':'image','provider':'pollinations','model':'test','credits':.001})['status']=='reserved'
-                assert gen('call_finish',fresh,{'key':'image','value':{'test':True}})['ok']
-                assert gen('call_start',fresh,{'key':'image','provider':'pollinations','model':'test','credits':.001})['detail_json']['test']
+                image_reservation=gen('call_start',fresh,image_call)
+                assert image_reservation['new']
+                request_saved=image_reservation['detail_json']['image_request']
+                assert request_saved['body_json']==image_body and request_saved['key_fingerprint']==image_request['key_fingerprint']
+                assert request_saved['started_at']==image_reservation['created_at']
+                assert gen('call_start',fresh,image_call)['status']=='reserved'
+                rotated=hashlib.sha256(b'non-secret-replacement-fixture').hexdigest()
+                rekey={'key':'image','request_hash':image_request['request_hash'],'expected_fingerprint':image_request['key_fingerprint'],'key_fingerprint':rotated,'auth_status':401}
+                assert gen('call_rekey',fresh,rekey)['detail_json']['image_request']['key_fingerprint']==rotated
+                assert gen('call_rekey',fresh,rekey)['status']==409
+                assert gen('call_finish',fresh,{'key':'image','value':{'test':True},'request_hash':image_request['request_hash'],'cache_status':'HIT','provider_attempts':2})['ok']
+                image_settled=gen('call_start',fresh,image_call)['detail_json']
+                assert image_settled['asset']['test'] and image_settled['image_request']['body_json']==image_body
+                assert image_settled['provider_response']['cache_status']=='HIT'
                 assert gen('complete',fresh,{'url':'invalid'})['status']==409
                 finaltask=uuid.uuid4().hex
                 call('create',finaltask,{'video_id':fresh,'manifest':{'version':1,'operation':'assemble_script'}})
