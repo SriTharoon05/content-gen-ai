@@ -46,5 +46,18 @@ it **is** the reason to stay.
   change is not a sentence break or a pause. Keep expressive, natural connected speech.
 - In conversations, the second person responds to the actual previous point, challenges or
   clarifies it, and adds something new. Reactions such as "yeah, exactly" fit only when earned.
+- For English, keep dependent where/when/which/that clauses attached to a complete main clause.
+  Never insert full stops merely at image cuts; a sentence can continue across adjacent scenes.
+  An opening condition followed by a main clause is fine, as is an isolated natural response.
+- Review actual speech turns after merging adjacent beats with the same speaker. Do not fill
+  four of six neighboring turns with short reactions, generic praise or repeated sign-offs.
+  Five-word filler is still filler. Let a reaction lead into a substantive reply or question;
+  natural turns may span several images, with no fixed word, sentence or turn-count quota.
+- End with one informative payoff rather than a chain of "got it", "nice", "thanks" and farewells.
+- Keep concrete curiosity hooks, but do not invite dangerous DIY experiments or present hazardous
+  demonstrations as stunts to imitate. Do not encourage bodily contact with molten materials,
+  hot surfaces, hazardous chemicals or electrical equipment, or give instructions for risky stunts.
+  Use safe non-contact scenes, diagrams or clearly framed simulations instead. Educational discussion
+  is allowed; never claim a dangerous demonstration is safe, risk-free or verified.
 - Reject a script if its hook promises something the ending never explains, if the middle could
   be removed without losing information, or if it teaches nothing specific worth remembering.

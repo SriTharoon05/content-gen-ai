@@ -14,7 +14,7 @@ CREATE OR REPLACE FUNCTION public.cf_generation(p_action text,p_task_id text,p_p
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public,extensions,pg_temp AS $$
 DECLARE v public.videos%ROWTYPE; c public.channels%ROWTYPE; existing public.content_ledger%ROWTYPE;
   k text; data jsonb; entity text; angle text; vec vector(768); nearest double precision; threshold double precision;
-  cfg jsonb; opts jsonb; music jsonb; ready boolean; cost numeric; spent numeric; daily numeric;
+  cfg jsonb; opts jsonb; music jsonb; ready boolean; cost numeric; spent numeric; daily numeric; image_slot timestamptz;
 BEGIN
   IF p_task_id !~ '^[a-f0-9]{32}$' THEN RETURN '{"error":"Invalid video ID","status":400}'::jsonb; END IF;
   PERFORM pg_advisory_xact_lock(hashtext('cf-generation:'||p_task_id));
@@ -90,13 +90,16 @@ BEGIN
     k:=p_payload->>'model';
     PERFORM pg_advisory_xact_lock(hashtext('cf-image-rate:'||k));
     INSERT INTO public.cf_image_rate(model,next_at) VALUES(k,clock_timestamp()) ON CONFLICT DO NOTHING;
-    SELECT jsonb_build_object('wait_ms',greatest(0,ceil(extract(epoch FROM (next_at-clock_timestamp()))*1000)))
-      INTO data FROM public.cf_image_rate WHERE model=k;
-    IF (data->>'wait_ms')::integer>0 THEN RETURN data; END IF;
-    UPDATE public.cf_image_rate SET next_at=clock_timestamp()+
+    -- Reserve a fair future slot atomically instead of racing all channels for
+    -- six repeated polls. Each caller waits ONCE before its provider request.
+    SELECT greatest(next_at,clock_timestamp()) INTO image_slot FROM public.cf_image_rate WHERE model=k;
+    IF image_slot>clock_timestamp()+interval '2 minutes' THEN
+      RETURN '{"error":"Image rate queue full; no provider request attempted","status":429}'::jsonb;
+    END IF;
+    UPDATE public.cf_image_rate SET next_at=image_slot+
       CASE WHEN k='lykon/dreamshaper-8-lcm' THEN interval '220 milliseconds' ELSE interval '1100 milliseconds' END
       WHERE model=k;
-    RETURN '{"wait_ms":0}'::jsonb;
+    RETURN jsonb_build_object('granted',true,'not_before',image_slot,'wait_ms',greatest(0,ceil(extract(epoch FROM (image_slot-clock_timestamp()))*1000)));
   ELSIF p_action='call_start' THEN
     k:=p_payload->>'key';
     SELECT to_jsonb(pc) INTO data FROM public.provider_calls pc WHERE idempotency_key='cf:'||p_task_id||':'||k;

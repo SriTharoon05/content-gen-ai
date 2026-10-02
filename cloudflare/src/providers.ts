@@ -246,6 +246,12 @@ export async function image(env:Env,id:string,stage:string,c:any,prompt:string,l
       imageReplayTime(reservation);
       if(permitChecks++>=maxPermitChecks)throw new Error('Image rate gate busy; no additional provider request attempted');
       const permit=await generation(env,'image_permit',id,{model,key:stage});
+      if(permit.granted===true){
+        const wait=Number(permit.wait_ms);
+        if(!Number.isFinite(wait)||wait<0||wait>120000)throw new Error('Invalid image rate reservation; no provider request attempted');
+        if(wait>0)await imageWait(wait+50);
+        break;
+      }
       if(!permit.wait_ms)break;
       await imageWait(Math.min(2000,permit.wait_ms+50));
     }

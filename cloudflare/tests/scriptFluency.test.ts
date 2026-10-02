@@ -21,6 +21,15 @@ const split=(text:string,parts:number)=>{
 const script=(texts:string[],duo=false)=>({hook_kind:'question',hook,flagged_claims:[],beats:texts.map((narration,i)=>({shot_id:'s'+String(i+1).padStart(3,'0'),speaker:duo?(i<12?'Alex':'Sam'):'',narration,scene_note:'',emphasis_words:[]}))});
 const badScript=()=>script([hook,...split(explanation+' This familiar stability makes ordinary surroundings feel continuous. '+badTail,24)]);
 const naturalDuo=()=>script([hook,...split(explanation,11),...split(response,13)],true);
+const substantiveAddition='The most useful takeaway is to connect the observation to the process instead of pretending every related explanation is interchangeable.';
+const dependentParagraph='That miracle comes from Leidenfrost. where water instantly flashes to steam. when it meets a surface far hotter than its boiling point. The steam forms an ultra-thin vapor layer. that insulates the remaining liquid from the heated surface.';
+const dependentScript=()=>script([hook,...split(explanation+' '+substantiveAddition+' '+dependentParagraph,24)]);
+const fillerTail=["Exactly, that's the core idea.",'Got it.','Makes sense.','Cool tech, really impressive stuff.',"Nice, that's really useful info.",'Future dry technologies look promising.','Thanks.','Stay curious.','See you next time, friends.','The sound of drying.'];
+const fillerDuo=()=>{
+  const s=script([hook,...split(explanation+' '+substantiveAddition,14),...fillerTail],true);
+  s.beats.forEach((beat,i)=>{beat.speaker=i<15?'Alex':(i%2?'Sam':'Alex');});
+  return s;
+};
 
 test('real robotic tail fails on joined English narration with actionable repair feedback',()=>{
   assert.throws(()=>validateScript(badScript()),(error:any)=>{
@@ -55,6 +64,57 @@ test('English guard permits two brief sentences but rejects three; localized val
   assert.throws(()=>validateScript(script([hook,...split(base+' You notice. That matters. Look again.',24)])),/English fluency guard/);
   assert.doesNotThrow(()=>validateScript(badScript(),{language:'ta',conversation:false}));
 });
+test('exact dependent-clause paragraph is rejected after joining scene cuts, including lowercase continuations',()=>{
+  assert.throws(()=>validateScript(dependentScript()),(error:any)=>{
+    assert.match(error.message,/consecutive dependent-clause fragments/);
+    assert.match(error.message,/where water instantly flashes to steam/);
+    assert.match(error.message,/when it meets a surface far hotter than its boiling point/);
+    assert.match(error.message,/complete main clause/);
+    return true;
+  });
+});
+test('exact alternating filler tail is rejected despite five-word filler resetting the old short-sentence guard',()=>{
+  assert.throws(()=>validateScript(fillerDuo(),{language:'en',conversation:true}),(error:any)=>{
+    assert.match(error.message,/filler-heavy actual speech turns/);
+    assert.match(error.message,/Cool tech, really impressive stuff/);
+    assert.match(error.message,/generic praise and multiple sign-offs/);
+    return true;
+  });
+});
+test('merging same-speaker tail beats cannot hide a burst of five-word generic filler',()=>{
+  const s=fillerDuo();s.beats.slice(15).forEach(b=>{b.speaker='Sam';});
+  assert.throws(()=>validateScript(s,{language:'en',conversation:true}),/filler-heavy sentences within speech turn/);
+});
+test('correct relative and conditional clauses remain fluent when the sentences span images',()=>{
+  const connected='That behavior illustrates a conditional effect, where vapor can reduce direct contact between liquid and a hot surface. When the surface is hot enough, some water can vaporize and create a layer around the remaining liquid. That layer is not guaranteed under every combination of surface condition and temperature, so the explanation must remain limited.';
+  assert.doesNotThrow(()=>validateScript(script([hook,...split(explanation+' '+connected,24)])));
+});
+test('an isolated dependent reply and earned five-word reaction followed by substance remain valid across same-speaker beats',()=>{
+  for(const opening of ['because heat can leave through evaporation.',"Exactly, that's the core idea."]){
+    const s=script([hook,...split(explanation,11),...split(opening+' '+response,13)],true);
+    assert.doesNotThrow(()=>validateScript(s,{language:'en',conversation:true}));
+  }
+});
+test('three substantive turns with earned brief reactions have no fixed sentence or words-per-image quota',()=>{
+  const words=explanation.split(/\s+/);const middle=Math.floor(words.length/2);
+  const s=script([hook,...split(words.slice(0,middle).join(' '),7),...split(response,9),...split(words.slice(middle).join(' '),8)],true);
+  s.beats.forEach((beat,i)=>{beat.speaker=i<8||i>=17?'Alex':'Sam';});
+  assert.equal(s.beats.length,25);assert.doesNotThrow(()=>validateScript(s,{language:'en',conversation:true}));
+});
+test('new fluency failures repair with concrete feedback and preserve the original narration rules',async()=>{
+  const config={channel:{strategy_json:{conversation:true}},settings:{keys:{gemini_free:['fixture'],groq:['fixture']}}};
+  let saved:any;
+  await assert.rejects(scriptWithRepair(config,'reserved concept',contract.schemas.Script,null,async()=>fillerDuo(),s=>validateScript(s,{language:'en',conversation:true}),async v=>{saved=v;}),/filler-heavy actual speech turns/);
+  await scriptWithRepair(config,'reserved concept',contract.schemas.Script,saved,async(_c,p)=>{
+    assert.match(p,/filler-heavy actual speech turns/);assert.match(p,/generic praise/);
+    assert.match(p,/Aggregate adjacent beats with the same speaker into an actual speech turn/);
+    assert.match(p,/Do not break dependent where\/when\/which\/that clauses/);
+    assert.match(p,/do not invite dangerous DIY experiments/);
+    assert.match(p,/safe non-contact scenes, diagrams or clearly framed simulations/);
+    assert.match(p,/Keep a concrete engaging curiosity question/);
+    return naturalDuo();
+  },s=>validateScript(s,{language:'en',conversation:true}),async()=>{throw new Error('Valid repair must not fail');});
+});
 test('fluency failure is persisted and supplied to the existing bounded script repair',async()=>{
   const config={channel:{strategy_json:{conversation:true}},settings:{keys:{gemini_free:['fixture'],groq:['fixture']}}};
   let saved:any;
@@ -67,11 +127,11 @@ test('fluency failure is persisted and supplied to the existing bounded script r
   },s=>validateScript(s,{language:'en',conversation:true}),async()=>{throw new Error('Valid revision must not fail');});
   assert.deepEqual(repaired,naturalDuo());assert.equal(saved.attempts,1);
 });
-test('cached robotic script also stops coordinator before QA, TTS or image purchases',async()=>{
+for(const fixture of [{name:'robotic short-sentence tail',create:badScript,conversation:false},{name:'dependent-clause paragraph',create:dependentScript,conversation:false},{name:'alternating filler tail',create:fillerDuo,conversation:true}])test('cached '+fixture.name+' stops coordinator before QA, TTS or image purchases',async()=>{
   const original=globalThis.fetch;const actions:string[]=[];let children=0;let recordedError='';
   globalThis.fetch=async(_url,init)=>{
     const p=JSON.parse(String(init?.body));actions.push(p.p_action);
-    if(p.p_action==='status')return Response.json({steps:{profile:{language:'en',conversation:false,options:{}},'default-bgm':{music:null},concepts:{},concept:{},premise:{},script:badScript()}});
+    if(p.p_action==='status')return Response.json({steps:{profile:{language:'en',conversation:fixture.conversation,options:{}},'default-bgm':{music:null},concepts:{},concept:{},premise:{},script:fixture.create()}});
     if(p.p_action==='fail'){recordedError=p.p_payload.error;return Response.json({ok:true});}
     throw new Error('No provider, approved-script or media mutation expected');
   };

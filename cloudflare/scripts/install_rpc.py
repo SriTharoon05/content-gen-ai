@@ -72,8 +72,16 @@ def main():
                 other=uuid.uuid4().hex
                 assert gen('create',other,{'channel':'lorehush','review_required':True})['id']==other
                 rate_model='rate-fixture-'+fresh
-                assert gen('image_permit',fresh,{'model':rate_model})['wait_ms']==0
-                assert gen('image_permit',other,{'model':rate_model})['wait_ms']>0
+                first=gen('image_permit',fresh,{'model':rate_model})
+                assert first['granted'] and first['wait_ms']==0
+                # Each competing channel receives its own future slot, not
+                # another poll/race. Fixtures and rate rows roll back below.
+                waits=[gen('image_permit',other,{'model':rate_model}) for _ in range(9)]
+                assert all(item['granted'] for item in waits)
+                # Client/database latency can consume a queued wait. Absolute
+                # slots must still be distinct and ordered for every caller.
+                assert all(waits[i]['not_before']<waits[i+1]['not_before'] for i in range(8))
+                assert all(item['wait_ms']>=0 for item in waits)
                 assert gen('image_permit',other,{'model':rate_model+'-independent'})['wait_ms']==0
                 for role in ('anon','authenticated'):
                     assert not connection.execute(text("SELECT has_table_privilege(:r,'public.cf_image_rate','SELECT')"),{'r':role}).scalar()

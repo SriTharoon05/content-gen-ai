@@ -37,12 +37,57 @@ export function validateSchema(value:any,schema:any,root=schema,path='$'):void {
     if(value<(schema.minimum??-Infinity)||value>(schema.maximum??Infinity))fail(`Number outside ${schema.minimum??'unbounded'}–${schema.maximum??'unbounded'}`);
   }
 }
+const englishSpeechWords=(text:string)=>text.match(/\p{L}+(?:['’\u2011-]\p{L}+)*|\p{N}+(?:[.,]\p{N}+)*/gu)||[];
+const dependentAfterStop=/(?<=[.!?])\s+(?=(?:where|when|because|although|while|which|whose|unless|until|since|if|whether|even though|so that|that)\b)/i;
+const englishSentenceSegmenter=new Intl.Segmenter('en',{granularity:'sentence'});
+const englishSentences=(text:string)=>Array.from(englishSentenceSegmenter.segment(text),({segment})=>segment.split(dependentAfterStop)).flat().map(s=>s.trim()).filter(s=>englishSpeechWords(s).length>0);
+// Generic reaction vocabulary, not a topic blacklist or a factual classifier.
+const fillerVocabulary=new Set('yeah yes yep right exactly absolutely sure okay ok wow cool nice great got it makes make sense thanks thank you stay curious see next time friends friend goodbye bye thats that is its really very quite so the a an core idea point tech technology technologies useful helpful interesting impressive amazing promising info information stuff good sounds sound understood agreed indeed totally'.split(' '));
+function lowInformationSentence(sentence:string){
+  const words=englishSpeechWords(sentence);
+  return words.length<=4||(words.length<=7&&words.every(w=>fillerVocabulary.has(w.toLowerCase().replace(/['’]/g,''))));
+}
+function fillerBurst(items:{text:string;low:boolean}[],kind:string){
+  for(let i=0;i<items.length;i++){
+    const window=items.slice(i,i+6);if(window.length<4)break;
+    const low=window.filter(item=>item.low);
+    // Four low-information items in a 4–6 item neighborhood, not one isolated
+    // acknowledgement or a fixed words-per-image/speaker-turn requirement.
+    if(low.length>=4&&low.length/window.length>=2/3)throw new Error('$.beats: English fluency guard: filler-heavy '+kind+' '+(i+1)+'–'+(i+window.length)+' ('+low.length+'/'+window.length+' low-information items): '+JSON.stringify(low.slice(0,4).map(item=>item.text))+'. Replace repeated acknowledgements, generic praise and multiple sign-offs with substantive replies and one meaningful payoff. Aggregate adjacent same-speaker beats into a speech turn; do not add words just to satisfy a quota.');
+  }
+}
+function validateEnglishSpeech(narration:string,turns:{speaker:string;text:string}[]){
+  let brief:string[]=[];
+  for(const sentence of englishSentences(narration)){
+    if(englishSpeechWords(sentence).length>4){brief=[];continue;}
+    brief.push(sentence);
+    if(brief.length===3)throw new Error('$.beats: English fluency guard: three consecutive sentences or telegraphic fragments contain at most 4 words each: '+JSON.stringify(brief)+'. Rewrite this sequence as connected, substantive narration, preserving the meaning and 130–205 total words. A fluent sentence may span scene cuts; isolated natural replies such as "Yeah, exactly." followed by a substantive sentence are allowed. Do not pad, repeat or invent facts to meet the word count.');
+  }
+  const turnInformation:{text:string;low:boolean}[]=[];
+  for(let i=0;i<turns.length;i++){
+    let fragments:string[]=[];
+    const sentences=englishSentences(turns[i].text);
+    for(const sentence of sentences){
+      // A repeated lowercase dependent continuation after a full stop is a
+      // narrow, strong signal of artificial sentence breaks. Comma-separated
+      // condition + main clause, questions and isolated replies remain allowed.
+      const dependent=/^(?:where|when|because|although|while|which|whose|unless|until|since|if|whether|even though|so that|that)\b/.test(sentence)&&!/[?,:;—–]/.test(sentence);
+      if(!dependent){fragments=[];continue;}
+      fragments.push(sentence);
+      if(fragments.length===2)throw new Error('$.beats: English fluency guard: consecutive dependent-clause fragments in speech turn '+(i+1)+': '+JSON.stringify(fragments)+'. Reconnect where/when/that clauses to their main sentence with appropriate punctuation, even across image cuts. Each spoken thought needs a complete main clause; preserve the meaning, not the artificial full stops. An isolated natural reply is allowed.');
+    }
+    const information=sentences.map(text=>({text,low:lowInformationSentence(text)}));
+    fillerBurst(information,'sentences within speech turn '+(i+1));
+    turnInformation.push({text:turns[i].text,low:information.every(item=>item.low)});
+  }
+  if(turns.length>1)fillerBurst(turnInformation,'actual speech turns');
+}
 export function validateScript(s:any,profile={language:'en',conversation:false}) {
   validateSchema(s,contract.schemas.Script);
   if(s.beats.length<20||s.beats.length>30)throw new Error(`Expected 20–30 contextual scenes; received ${s.beats.length}`);
   if(s.beats.some((b:any,i:number)=>b.shot_id!==`s${String(i+1).padStart(3,'0')}`||(!profile.conversation&&b.speaker)))throw new Error('Invalid scene IDs or single-narrator speaker');
   for(let i=0;i<s.beats.length;i++)if(/[\[\]]/.test(s.beats[i].narration))throw new Error(`$.beats[${i}].narration: No square-bracket audio tags or stage directions in spoken narration; move delivery instructions to scene_note for the voice director`);
-  if(profile.conversation)conversationTurns(s.beats);
+  const turns=profile.conversation?conversationTurns(s.beats):null;
   const count=s.beats.reduce((n:number,b:any)=>n+b.narration.trim().split(/\s+/).length,0);
   if(profile.language==='en'&&(count<130||count>205))throw new Error(`Expected 130–205 spoken words; received ${count}`);
   // Non-English tokenization differs substantially; measured audio below is the
@@ -54,18 +99,11 @@ export function validateScript(s:any,profile={language:'en',conversation:false})
     // Inspect spoken sentences, not visual beats: one fluent sentence may span
     // several image cuts. Sentence segmentation also avoids splitting decimals.
     const narration=s.beats.map((b:any)=>b.narration.trim()).join(' ');
-    let brief:string[]=[];
-    for(const {segment} of new Intl.Segmenter('en',{granularity:'sentence'}).segment(narration)){
-      const words=segment.match(/\p{L}+(?:['’\u2011-]\p{L}+)*|\p{N}+(?:[.,]\p{N}+)*/gu)||[];
-      if(!words.length)continue;
-      if(words.length>4){brief=[];continue;}
-      brief.push(segment.trim());
-      if(brief.length===3)throw new Error('$.beats: English fluency guard: three consecutive sentences or telegraphic fragments contain at most 4 words each: '+JSON.stringify(brief)+'. Rewrite this sequence as connected, substantive narration, preserving the meaning and 130–205 total words. A fluent sentence may span scene cuts; isolated natural replies such as "Yeah, exactly." followed by a substantive sentence are allowed. Do not pad, repeat or invent facts to meet the word count.');
-    }
+    validateEnglishSpeech(narration,turns||[{speaker:'',text:narration}]);
   }
 }
 const skill=(name:string)=>(contract.skills as Record<string,string>)[name+'.md']||'';
-const groundedConceptRules='For factual channels, build curiosity around an ordinary established explanatory mechanism, documented historical context or grounded causal puzzle. Do not invent breakthroughs, experimental improvements, precise numbers, studies, institutions or current events to make a concept exciting. Frontier applications must explicitly remain future, noncurrent and unproven, not available technology. For fiction channels, imaginative events must be clearly fictional, never claimed historical or scientific evidence.';
+const groundedConceptRules='For factual channels, build curiosity around an ordinary established explanatory mechanism, documented historical context or grounded causal puzzle. Do not invent breakthroughs, experimental improvements, precise numbers, studies, institutions or current events to make a concept exciting. Frontier applications must explicitly remain future, noncurrent and unproven, not available technology. For fiction channels, imaginative events must be clearly fictional, never claimed historical or scientific evidence. A concrete curious question with safe non-contact visuals can be engaging; do not introduce dangerous DIY experiments, imitable hazardous stunts or claims that a dangerous demonstration is safe or verified.';
 const mechanismReviewRules='MECHANISM REVIEW: Review the actual causal explanation, not just fluency or engagement. Distinguish the observed phenomenon from a proposed mechanism and from scientific consensus. FAIL claims that treat a contested, competing or condition-dependent explanation as a universal established cause, or imply consensus where the mechanism remains uncertain. FAIL conflation of distinct technical terms, mechanisms or observation conditions, even when those terms are related. Identify the exact claim and require an accurately limited explanation, explicit uncertainty or deletion; do not invent evidence, sources or an alternative definitive mechanism. Ordinary established explanatory facts need no blanket warning, and an empty flagged_claims list is not proof of accuracy. This is editorial model review, not an external fact check or a topic ban.';
 
 class Continued extends Error {}

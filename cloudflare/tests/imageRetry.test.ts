@@ -152,6 +152,22 @@ test('busy gate safely stops at six checks with no provider HTTP',async()=>fixtu
   assert.equal(f.provider.length,0);assert.equal(f.actions.filter((r:any)=>r.p_action==='image_permit').length,6);
 }));
 
+test('fair queued permit waits once per attempt without repolling or starvation',async()=>fixture(async f=>{
+  f.permit=()=>({granted:true,wait_ms:2200});
+  f.response=async(_:any,attempt:number)=>attempt===1?new Response('{}',{status:503}):result();
+  await image(env,id,'image-s001',cfg(),prompt);
+  assert.equal(f.actions.filter((r:any)=>r.p_action==='image_permit').length,2);
+  assert.equal(f.provider.length,2);assert.deepEqual(f.delays,[2250,2000,2250]);
+}));
+
+test('invalid or excessive reserved rate wait fails before provider request',async()=>{
+  for(const wait of [-1,120001,'bad'])await fixture(async f=>{
+    f.permit=()=>({granted:true,wait_ms:wait});
+    await assert.rejects(image(env,id,'image-s001',cfg(),prompt),/Invalid image rate reservation/);
+    assert.equal(f.provider.length,0);
+  });
+});
+
 test('definitive new-call 401/403 key rotation is durable before HTTP; replay and ambiguous calls cannot rotate',async()=>{
   await fixture(async f=>{
     f.response=async(_:any,attempt:number)=>attempt<3?new Response('{}',{status:attempt===1?401:403}):result();
