@@ -7,6 +7,7 @@ import {handleEditing} from './editing';
 import {publishingRoute,reconcilePublishing} from './publishing';
 import {oauthRoute} from './oauth';
 import {newsRoute,newsTick} from './news';
+import {platformUsage} from './platformUsage';
 export {NewsWorkflow} from './news';
 export {MediaWorkflow} from './workflow';
 export {GenerationWorkflow} from './generation';
@@ -84,6 +85,9 @@ export default {
       if(path==='/api/health'&&request.method==='GET'){
         await authorize(request,env.ADMIN_TOKEN);
         return reply({ok:true,backend:'cloudflare',production_ready:false,capabilities:['generation','preview','timing','channels','settings','scheduling','publishing','oauth','analytics','music','editing']});
+      }
+      if(path==='/api/platform-usage'&&request.method==='GET'){
+        await authorize(request,env.ADMIN_TOKEN);return reply(await platformUsage(env));
       }
       const runMatch=path.match(/^\/api\/channels\/([a-z0-9_-]{1,64})\/run$/);
       if(runMatch&&request.method==='POST'){

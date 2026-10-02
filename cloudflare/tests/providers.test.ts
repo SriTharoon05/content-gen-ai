@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {parseJSON,speechChunks,pcmWav,textModel,merge,image as generateImage,geminiSpeech} from '../src/providers';
+import {parseJSON,speechChunks,pcmWav,textModel,merge,image as generateImage,geminiSpeech,closedSchema} from '../src/providers';
 import type {Env} from '../src/types';
 test('JSON rejects trailing content but accepts a single fenced object',()=>{
   assert.deepEqual(parseJSON('```json\n{"a":1}\n```'),{a:1});
@@ -33,6 +33,16 @@ test('legacy breathy narrator uses clear voice and selected Gemini model',async(
 });
 test('settings preserve defaults while applying nested owner values',()=>{
   assert.deepEqual(merge({a:{b:1,c:2}},{a:{b:3}}),{a:{b:3,c:2}});
+});
+
+test('script provider schema closes referenced objects and keeps exact scene bounds',()=>{
+  const schema={$defs:{Beat:{type:'object',properties:{narration:{type:'string',minLength:2,maxLength:240,pattern:'.*\\S.*'},speaker:{type:'string',default:''}},required:['narration']}},type:'object',properties:{beats:{type:'array',minItems:25,maxItems:25,items:{$ref:'#/$defs/Beat'}}}};
+  const s=closedSchema(schema);assert.equal(s.additionalProperties,false);assert.deepEqual(s.required,['beats']);
+  assert.equal(s.properties.beats.minItems,25);assert.equal(s.properties.beats.items.additionalProperties,false);
+  assert.deepEqual(s.properties.beats.items.required,['narration','speaker']);assert.ok(!('default' in s.properties.beats.items.properties.speaker));
+  assert.equal(s.properties.beats.items.properties.narration.minLength,2);
+  assert.equal(s.properties.beats.items.properties.narration.maxLength,240);
+  assert.equal(s.properties.beats.items.properties.narration.pattern,'.*\\S.*');
 });
 test('429 on one key immediately advances independently to next and falls back to Groq',async()=>{
   const original=globalThis.fetch;const seen:string[]=[];

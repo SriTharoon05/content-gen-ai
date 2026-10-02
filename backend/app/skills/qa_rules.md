@@ -16,3 +16,9 @@ and the ending must answer the opening with a concrete informative payoff. Rejec
 paraphrases, unsupported sweeping claims and generic motivation. Historical mysteries cannot use
 invented evidence; near-future speculation cannot be described as an available proven capability.
 Fictional examples must be clear as fictional. Scene boundaries must not make narration choppy.
+
+Writer-flagged uncertain claims are unresolved risks, not proof. Do not approve them just because
+the script is engaging. Remove unsupported precise numbers and claimed breakthroughs, or explicitly
+describe an unproven possibility without presenting it as available technology. Prefer an accurate
+explanation of a well-established mechanism over a spectacular but unsupported future claim.
+Do not clear a flag while retaining the same unsupported assertion in narration.

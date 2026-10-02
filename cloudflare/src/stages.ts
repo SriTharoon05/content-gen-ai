@@ -4,10 +4,34 @@ import {config,textModel,embedding,geminiSpeech,groqSpeech,transcribe,image,uplo
 import {digest,validateManifest} from './storage';
 import {validateSchema,validateScript} from './generation';
 import contract from './contract.json';
-import type {Env} from './types';
+import type {Env,Asset} from './types';
 import {scriptWithRepair} from './scriptRepair';
 
 export interface StageParams {videoId:string;name:string;op:string;data:any;retries:number;parentId?:string;parentKind?:'generation'|'media';}
+export interface ImageBatchShot {shot_id:string;prompt:string;}
+type ImageRequest=(env:Env,id:string,stage:string,c:any,prompt:string,options?:{maxPermitChecks:number;maxKeys:number})=>Promise<Asset>;
+export function imageBatchConcurrency(c:any){
+  const requested=Number(c.settings.runtime?.image_concurrency??3);
+  const ownerLimit=[1,2,3].includes(requested)?requested:3;
+  return Math.min(ownerLimit,(c.settings.keys?.pollinations?.length??0)>1?2:3);
+}
+export async function generateImageBatch(env:Env,id:string,shots:ImageBatchShot[],state:any,c:any,requestImage:ImageRequest=image){
+  if(!Array.isArray(shots)||shots.length<1||shots.length>3||new Set(shots.map(s=>s.shot_id)).size!==shots.length||shots.some(s=>!/^s\d{3}$/.test(s.shot_id)||typeof s.prompt!=='string'||!s.prompt.trim()))throw new Error('Image batch requires one to three distinct scene IDs and prompts');
+  const outcomes=await Promise.allSettled(shots.map(async shot=>{
+    const key='image-'+shot.shot_id;
+    const asset=Object.prototype.hasOwnProperty.call(state.steps||{},key)?state.steps[key]
+      :await requestImage(env,id,key,c,shot.prompt,{maxPermitChecks:6,maxKeys:shots.length===3?1:4});
+    // Same keys/ledger as the old standalone child. Persist successful siblings
+    // even if another image fails, so continuation/recovery cannot rebuy them.
+    if(!Object.prototype.hasOwnProperty.call(state.steps||{},key))await generation(env,'save',id,{key,value:asset});
+    return {shot_id:shot.shot_id,name:'images/'+shot.shot_id+'.png',asset};
+  }));
+  for(let i=0;i<outcomes.length;i++)if(outcomes[i].status==='rejected'){
+    const error=(outcomes[i] as PromiseRejectedResult).reason;
+    throw new Error('image-'+shots[i].shot_id+': '+(error instanceof Error?error.message:'Image failed'));
+  }
+  return outcomes.map(result=>(result as PromiseFulfilledResult<{shot_id:string;name:string;asset:Asset}>).value);
+}
 export function stageEventTimeout(retries:number):`${number} minutes` {
   // A child attempt may run for 15 minutes. Two retries plus their backoff
   // cannot fit inside the previous fixed 16-minute parent deadline.
@@ -114,7 +138,9 @@ export class GenerationStageWorkflow extends WorkflowEntrypoint<Env,StageParams>
         } else if(op==='groq-audio')value=await groqSpeech(this.env,c,data.text,data.speaker);
         else if(op==='words')value=await transcribe(c,data.url);
         else if(op==='english-captions')value=await englishCaptions(c,data.words);
-        else if(op==='profile')value=generationProfile(c);
+        else if(op==='profile'){
+          value={...generationProfile(c),imageConcurrency:imageBatchConcurrency(c)};
+        }
         else if(op==='default-bgm'){
           const {options}=generationProfile(c);
           const track=c.music_track;
@@ -133,6 +159,7 @@ export class GenerationStageWorkflow extends WorkflowEntrypoint<Env,StageParams>
           }
         }
         else if(op==='image')value=await image(this.env,id,name,c,data.prompt);
+        else if(op==='image-batch')value=await generateImageBatch(this.env,id,data.shots,state,c);
         else if(op==='settings'){
           const s=c.settings;value={video:{...s.video,width:720,height:1280,fps:30},music:s.music,align:s.align,runtime:{ffmpeg_path:'ffmpeg',ffprobe_path:'ffprobe',low_memory_render:true}};
         } else throw new Error('Unknown generation stage');

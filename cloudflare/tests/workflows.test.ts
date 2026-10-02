@@ -118,16 +118,42 @@ test('coordinator checkpoints exactly eight new stages then continues durably',a
     MEDIA_WORKFLOW:{get:async()=>({status:async()=>({status:'complete'})})}};
   try {
     let active=0,peak=0;
-    const runner=step();const wait=runner.waitForEvent;
+    const runner:any=step();
     runner.waitForEvent=async()=>{
       active++;peak=Math.max(peak,active);
       await new Promise(resolve=>setTimeout(resolve,10));
-      try{return await wait();}finally{active--;}
+      try{
+        const child=children.at(-1);
+        const value=child.params.op==='image-batch'?child.params.data.shots.map((shot:any)=>({shot_id:shot.shot_id,name:'images/'+shot.shot_id+'.png',asset:{url:'https://res.cloudinary.com/test/image/upload/a.png',sha256:'a'.repeat(64)}})):{};
+        return {payload:{ok:true,value}};
+      }finally{active--;}
     };
     const result=await new GenerationWorkflow({},env).run({instanceId:'fixture-run',payload:{videoId:'a'.repeat(32)}},runner);
-    assert.equal(peak,3);assert.equal(active,0);
+    assert.equal(peak,1);assert.equal(active,0);
     assert.equal(result.status,'continued');assert.equal(children.length,8);assert.equal(continuations.length,1);
     assert.equal(continuations[0].params.segment,1);assert.ok(external<10);
-    assert.ok(children.every(c=>c.params.op==='image'));
+    assert.equal(children.filter(c=>c.params.op==='image-batch').length,7);
+    assert.deepEqual(children.filter(c=>c.params.op==='image-batch').map(c=>c.params.data.shots.length),[3,3,3,3,3,3,2]);
+    assert.deepEqual(children.filter(c=>c.params.op==='image-batch').map(c=>c.params.retries),[1,1,1,1,1,1,2]);
+    assert.equal(children[7].params.data.schema,'PublishCopy');
   } finally{globalThis.fetch=original;}
+});
+test('generation refuses TTS when writer risks survive both revisions despite positive model reviews',async()=>{
+  const beats=Array.from({length:20},(_,i)=>({shot_id:'s'+String(i+1).padStart(3,'0'),speaker:'',narration:'Could you imagine this curious secret today?',emphasis_words:[]}));
+  const script={hook_kind:'question',hook:beats[0].narration,beats,flagged_claims:['Unsupported technology is available today']};
+  const saved={profile:{language:'en',conversation:false,options:{}},'default-bgm':{music:null},concepts:{},concept:{},premise:{},script,qa:{passed:true,findings:[]}};
+  const original=globalThis.fetch;const children:any[]=[];let failed=false;
+  globalThis.fetch=async(_url,init)=>{
+    const p=JSON.parse(String(init?.body));
+    if(p.p_action==='status')return Response.json({steps:saved});
+    if(p.p_action==='fail'){failed=true;return Response.json({ok:true});}
+    throw new Error('Must not save approved script or buy media');
+  };
+  const env={SUPABASE_URL:'https://database.test',SUPABASE_KEY:'fixture',GENERATION_STAGE:{create:async(p:any)=>{children.push(p);}}};
+  const runner:any=step();runner.waitForEvent=async()=>({payload:{ok:true,value:children.at(-1).params.data.schema==='Script'?script:{passed:true,findings:[]}}});
+  try{
+    await assert.rejects(new GenerationWorkflow({},env).run({instanceId:'fixture',payload:{videoId:'a'.repeat(32)}},runner),/Editorial QA failed after two revisions/);
+    assert.equal(failed,true);assert.deepEqual(children.map(c=>c.params.name),['revision-0','review-0','revision-1','review-1']);
+    assert.ok(children.every(c=>c.params.op==='model'));
+  }finally{globalThis.fetch=original;}
 });

@@ -176,7 +176,7 @@ def write_script(
         "- emphasis_words: 0-2 words per beat the narrator should hit harder.\n"
         "- scene_note: one short line describing what the viewer should SEE in that beat.\n"
         "- No stage directions, speaker labels, emoji, markdown, brackets or parentheses in narration.\n"
-        "- Put every factual claim that would need a source into flagged_claims.\n"
+        "- Put uncertain claims, unverified precise figures, alleged breakthroughs and current-news assertions into flagged_claims. Ordinary established explanatory facts do not need to be flagged. Any flagged claim must be removed or honestly reframed as an explicitly unproven possibility before production; never clear a flag while leaving the unsupported assertion unchanged.\n"
         "- Re-read the hook before the final beat: the last line must land the promise the hook made.",
         system="You are the script specialist. You write spoken narration only." + BOUNDARY,
         temperature=0.9,
@@ -375,7 +375,7 @@ def plan_edit(channel: dict, shots: list[dict], music: list[dict], options: dict
 
 def review(channel: dict, premise: Premise, script: Script, options: dict | None = None) -> QAFinding:
     narration = " ".join(beat.narration for beat in script.beats)
-    return generate_model(
+    finding = generate_model(
         QAFinding,
         f"{context(channel, options)}\nQA SKILL:\n{skill('qa_rules.md')}\n\n"
         f"PREMISE: {premise.premise_summary}\nHOOK ({script.hook_kind}): {script.beats[0].narration}\n\n"
@@ -391,6 +391,13 @@ def review(channel: dict, premise: Premise, script: Script, options: dict | None
         system="You are the QA specialist and you did not write this script." + BOUNDARY,
         temperature=0.3,
     )
+    if script.flagged_claims:
+        finding.passed = False
+        finding.findings.extend(
+            f"Remove or explicitly reframe this unresolved claim; do not merely clear its flag: {claim}"
+            for claim in script.flagged_claims
+        )
+    return finding
 
 
 # ------------------------------------------------------------------------------------ publishing

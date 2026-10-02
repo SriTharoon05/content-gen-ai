@@ -5,25 +5,35 @@ import type {Env,Manifest} from './types';
 import contract from './contract.json';
 import {runStage} from './stages';
 import {routeCompletedVideo} from './publishing';
+import {enforceFactualReview} from './factualReview';
 
 // The exact JSON schemas and editorial skills are exported from backend/app, not forked.
-export function validateSchema(value:any,schema:any,root=schema):void {
-  if(schema.$ref)return validateSchema(value,root.$defs[schema.$ref.split('/').pop()],root);
-  if(schema.anyOf){if(!schema.anyOf.some((s:any)=>{try{validateSchema(value,s,root);return true;}catch{return false;}}))throw new Error('Schema union mismatch');return;}
-  if(schema.enum&&!schema.enum.includes(value))throw new Error('Schema enum mismatch');
+export function validateSchema(value:any,schema:any,root=schema,path='$'):void {
+  const fail=(message:string):never=>{throw new Error(path+': '+message);};
+  if(schema.$ref)return validateSchema(value,root.$defs[schema.$ref.split('/').pop()],root,path);
+  if(schema.anyOf){
+    const errors:string[]=[];
+    for(const option of schema.anyOf){try{validateSchema(value,option,root,path);return;}catch(error){errors.push(error instanceof Error?error.message:'Invalid option');}}
+    fail('No matching schema option ('+errors.join('; ')+')');
+  }
+  if(schema.enum&&!schema.enum.includes(value))fail('Expected one of '+JSON.stringify(schema.enum));
   if(schema.type==='object'){
-    if(!value||typeof value!=='object'||Array.isArray(value))throw new Error('Expected object');
-    for(const k of schema.required||[])if(!(k in value))throw new Error('Missing '+k);
-    for(const [k,s] of Object.entries(schema.properties||{}))if(k in value)validateSchema(value[k],s,root);
+    if(!value||typeof value!=='object'||Array.isArray(value))fail('Expected object');
+    for(const k of schema.required||[])if(!(k in value))throw new Error(path+'.'+k+': Required field is missing');
+    for(const [k,s] of Object.entries(schema.properties||{}))if(k in value)validateSchema(value[k],s,root,path+'.'+k);
   } else if(schema.type==='array'){
-    if(!Array.isArray(value)||value.length<(schema.minItems||0)||value.length>(schema.maxItems??Infinity))throw new Error('Array bounds');
-    for(const item of value)validateSchema(item,schema.items,root);
+    if(!Array.isArray(value))fail('Expected array');
+    if(value.length<(schema.minItems||0)||value.length>(schema.maxItems??Infinity))fail(`Array length ${value.length}; expected ${schema.minItems||0}–${schema.maxItems??'unbounded'} items`);
+    for(let i=0;i<value.length;i++)validateSchema(value[i],schema.items,root,path+'['+i+']');
   } else if(schema.type==='string'){
-    if(typeof value!=='string'||value.length<(schema.minLength||0)||value.length>(schema.maxLength??Infinity))throw new Error('String bounds');
-  } else if(schema.type==='boolean'&&typeof value!=='boolean')throw new Error('Expected boolean');
-  else if(schema.type==='null'&&value!==null)throw new Error('Expected null');
+    if(typeof value!=='string')fail('Expected string');
+    if(value.length<(schema.minLength||0)||value.length>(schema.maxLength??Infinity))fail(`String length ${value.length}; expected ${schema.minLength||0}–${schema.maxLength??'unbounded'} characters`);
+    if(schema.pattern&&!new RegExp(schema.pattern).test(value))fail('String does not match required pattern '+schema.pattern);
+  } else if(schema.type==='boolean'&&typeof value!=='boolean')fail('Expected boolean');
+  else if(schema.type==='null'&&value!==null)fail('Expected null');
   else if(['number','integer'].includes(schema.type)){
-    if(typeof value!=='number'||!Number.isFinite(value)||(schema.type==='integer'&&!Number.isInteger(value))||value<(schema.minimum??-Infinity)||value>(schema.maximum??Infinity))throw new Error('Number bounds');
+    if(typeof value!=='number'||!Number.isFinite(value)||(schema.type==='integer'&&!Number.isInteger(value)))fail('Expected finite '+schema.type);
+    if(value<(schema.minimum??-Infinity)||value>(schema.maximum??Infinity))fail(`Number outside ${schema.minimum??'unbounded'}–${schema.maximum??'unbounded'}`);
   }
 }
 export function validateScript(s:any,profile={language:'en',conversation:false}) {
@@ -90,9 +100,11 @@ export class GenerationWorkflow extends WorkflowEntrypoint<Env,{videoId:string;s
       let script=await model('script','Script',()=>`${skill('hooks_and_retention')}\n${skill('audio_direction')}\nPREMISE:${JSON.stringify(premise)}
 Write 20–25 sequential visual beats, up to 30 only if context needs them. shot_id MUST be exactly s001, s002, s003 ... in order, never numeric IDs or other prefixes. ${languageRules} Natural fluent complete thoughts, no robotic fragments. An expressive human voice, contractions, varied rhythm. The first beat must give a specific reason to watch. Facts/science use a curiosity question or concrete puzzle, not generic hype. Fiction starts in an intriguing scene, not forced 'do you know'. ${scriptRules}`,checkScript);
       let qa=await model('qa','QAFinding',()=>`${skill('qa_rules')}\nRESERVED CONCEPT:${JSON.stringify(concept)}\nPREMISE:${JSON.stringify(premise)}\nReview this script for meaningful payoff, fluent connected sentences (not isolated robotic bullet points), channel fit, safe factual framing and a specific engaging hook. Fail if it changes the reserved entity/angle or invents historical events, evidence, dates, scientific confirmation or institutions without explicitly framing them as fiction. The examples in channel instructions are not evidence. SCRIPT:${JSON.stringify(script)}`);
+      qa=enforceFactualReview(script,qa);
       for(let r=0;!qa.passed&&r<2;r++){
         script=await model('revision-'+r,'Script',()=>`${skill('hooks_and_retention')}\nRevise ${JSON.stringify(script)} using ${JSON.stringify(qa.findings)}. Keep 20–30 beats, sequential IDs. ${languageRules} ${scriptRules}`,checkScript);
         qa=await model('review-'+r,'QAFinding',()=>`${skill('qa_rules')}\nRESERVED CONCEPT:${JSON.stringify(concept)}\nPREMISE:${JSON.stringify(premise)}\nFail if the revised script changes the reserved entity/angle, uses robotic fragments, or presents invented evidence/history/scientific confirmations as fact. Review revised script: ${JSON.stringify(script)}`);
+        qa=enforceFactualReview(script,qa);
       }
       if(!qa.passed)throw new Error('Editorial QA failed after two revisions');
       await step.do('save-approved-script',async()=>{await generation(this.env,'save',id,{key:'script',value:script});await generation(this.env,'save',id,{key:'qa',value:qa});});
@@ -134,17 +146,25 @@ Write 20–25 sequential visual beats, up to 30 only if context needs them. shot
         if(e.transitions.every((s:any)=>['hard_cut','match_cut'].includes(s.kind)))throw new Error('Missing contextual blend transitions');
       });
       const files:Manifest['files']={'narration.wav':{url:audio.url,sha256:audio.sha256}};const images:string[]=[];
+      const concurrency=Number(profile.imageConcurrency??3);
+      const imageConcurrency=[1,2,3].includes(concurrency)?concurrency:3;
       for(let i=0;i<visuals.shots.length;){
-        const capacity=Math.max(1,Math.min(3,8-completed));
-        const batch=visuals.shots.slice(i,i+capacity);
-        // Drain the whole batch before continuation or failure: never abandon paid siblings.
-        const outcomes=await Promise.allSettled(batch.map(async(shot:any)=>{
-          const asset=await checkpoint('image-'+shot.shot_id,'image',{prompt:shot.image_prompt+'\n'+visuals.style_block},2);
-          return {name:'images/'+shot.shot_id+'.png',asset};
-        }));
-        for(const result of outcomes){
-          if(result.status==='rejected')throw result.reason;
-          files[result.value.name]=result.value.asset;images.push(result.value.name);
+        const batch=visuals.shots.slice(i,i+imageConcurrency);
+        const pending=batch.filter((shot:any)=>!Object.prototype.hasOwnProperty.call(initial.steps,'image-'+shot.shot_id));
+        const recovered=new Map<string,Manifest['files'][string]>(batch.filter((shot:any)=>!pending.includes(shot)).map((shot:any)=>[shot.shot_id,initial.steps['image-'+shot.shot_id]]));
+        if(pending.length){
+          // Each bounded batch is one new coordinator stage, not one per image.
+          // Its child persists every individual image before saving this batch.
+          const name='image-batch-'+pending.map((shot:any)=>shot.shot_id).join('-');
+          // Three single-key images: <=39 requests initially and <=10 on one
+          // recovery retry. Two multi-key images: <=33 + 7 + 7 requests.
+          const assets=await checkpoint(name,'image-batch',{shots:pending.map((shot:any)=>({shot_id:shot.shot_id,prompt:shot.image_prompt+'\n'+visuals.style_block}))},pending.length===3?1:2);
+          for(const item of assets)recovered.set(item.shot_id,item.asset);
+        }
+        for(const shot of batch){
+          const name='images/'+shot.shot_id+'.png';const asset=recovered.get(shot.shot_id);
+          if(!asset)throw new Error('Image batch omitted '+shot.shot_id);
+          files[name]=asset;images.push(name);
         }
         i+=batch.length;
       }
