@@ -81,8 +81,9 @@ export async function runStage(env:Env,step:WorkflowStep,id:string,p:StageParams
 }
 export function context(c:any,schema?:string) {
   const channel=c.channel;
+  const {instructions:_instructions,...strategy}=channel.strategy_json||{};
   return `CHANNEL:${channel.name}. NICHE:${channel.niche}\nOWNER INSTRUCTIONS:${channel.strategy_json?.instructions??(contract.skills as any)['brand/'+channel.slug+'.md']??''}
-STRATEGY:${JSON.stringify(channel.strategy_json)}\nOPTIONS:${JSON.stringify(channel.overrides_json)}
+STRATEGY:${JSON.stringify(strategy)}\nOPTIONS:${JSON.stringify(channel.overrides_json)}
 REQUESTED TOPIC:${JSON.stringify(c.options?.topic||'Choose an original topic within the niche')}
 Original model-generated content. External fact checking disabled. Do not invent studies, current news, statistics or real-person quotes. Clearly frame fiction/speculation.
 ${schema==='UniqueConceptSet'?'PRIOR CONCEPTS:'+JSON.stringify(c.prior.slice(0,30)):''}`;

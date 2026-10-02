@@ -1,6 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {build} from 'esbuild';
+import contract from '../src/contract.json';
 
 const compiled=await build({stdin:{contents:"export {default as handler} from './src/index'; export {runStage,stageEventTimeout,GenerationStageWorkflow} from './src/stages'; export {MediaWorkflow} from './src/workflow'; export {GenerationWorkflow,validateScript} from './src/generation';",resolveDir:process.cwd()},bundle:true,platform:'node',format:'esm',write:false,
   plugins:[{name:'workflow-test-runtime',setup(b){
@@ -16,6 +17,16 @@ test('localized duo validation keeps strict scene IDs and two participants witho
   assert.throws(()=>validateScript({...script,beats:beats.map(b=>({...b,speaker:'Alex'}))},{language:'ta',conversation:true}),/Both/);
   assert.throws(()=>validateScript({...script,beats:beats.map(b=>({...b,shot_id:'x'}))},{language:'ta',conversation:true}),/scene IDs/);
   assert.throws(()=>validateScript({...script,beats:beats.map(b=>({...b,speaker:''}))},{language:'en',conversation:false}),/130–205/);
+});
+test('spoken narration tags are rejected with exact repair path in English and localized scripts',()=>{
+  for(const language of ['en','ta']){
+    const beats=Array.from({length:25},(_,i)=>({shot_id:'s'+String(i+1).padStart(3,'0'),speaker:'',narration:i===0?'Why does this familiar process surprise us every day?':'the familiar process continues across another image',emphasis_words:[],scene_note:'[warm] Director instruction, not spoken.'}));
+    const script={hook_kind:'question',hook:beats[0].narration,beats};
+    assert.doesNotThrow(()=>validateScript(script,{language,conversation:false}));
+    for(const tagged of ['[excited] the familiar process continues','the familiar process [pause] continues','the familiar process [stage direction']){
+      assert.throws(()=>validateScript({...script,beats:beats.map((b,i)=>({...b,narration:i===16?tagged:b.narration}))},{language,conversation:false}),/\$\.beats\[16\]\.narration: No square-bracket audio tags or stage directions/);
+    }
+  }
 });
 const step=()=>({do:async(_name:string,...args:any[])=>args.at(-1)(),sleep:async()=>{},waitForEvent:async()=>({payload:{ok:true,value:{url:'https://res.cloudinary.com/test/image/upload/a.png',sha256:'a'.repeat(64)}}})});
 
@@ -155,5 +166,42 @@ test('generation refuses TTS when writer risks survive both revisions despite po
     await assert.rejects(new GenerationWorkflow({},env).run({instanceId:'fixture',payload:{videoId:'a'.repeat(32)}},runner),/Editorial QA failed after two revisions/);
     assert.equal(failed,true);assert.deepEqual(children.map(c=>c.params.name),['revision-0','review-0','revision-1','review-1']);
     assert.ok(children.every(c=>c.params.op==='model'));
+    for(const child of children.filter(c=>c.params.data.schema==='Script')){
+      assert.match(child.params.data.prompt,/Preserve only the reserved entity\/angle, not inaccurate details/);
+      assert.match(child.params.data.prompt,/Delete invented studies, institutions, precise improvements and speculative applications/);
+      assert.match(child.params.data.prompt,/FINAL NARRATION SELF-CHECK/);
+      assert.match(child.params.data.prompt,/Never clear an entry while its assertion remains factual/);
+    }
+  }finally{globalThis.fetch=original;}
+});
+test('writer excludes audio skill while the later director retains it and reviews actual corrected narration',async()=>{
+  const beats=Array.from({length:25},(_,i)=>({shot_id:'s'+String(i+1).padStart(3,'0'),speaker:'',narration:i===0?'Why does this familiar process surprise us every day?':'the familiar process continues across another image',emphasis_words:[]}));
+  const script={hook_kind:'question',hook:beats[0].narration,beats,flagged_claims:[]};
+  const saved={profile:{language:'en',conversation:false,options:{}},'default-bgm':{music:null},concepts:{},concept:{core_entity:'Familiar process',content_angle:'Established mechanism'},premise:{}};
+  const original=globalThis.fetch;const children:any[]=[];
+  globalThis.fetch=async(_url,init)=>{
+    const p=JSON.parse(String(init?.body));
+    if(p.p_action==='status')return Response.json({steps:saved});
+    if(['save','fail'].includes(p.p_action))return Response.json({ok:true});
+    throw new Error('Must not buy media');
+  };
+  const env={SUPABASE_URL:'https://database.test',SUPABASE_KEY:'fixture',GENERATION_STAGE:{create:async(p:any)=>{children.push(p);},get:async()=>({status:async()=>({status:'errored'})})}};
+  const runner:any=step();runner.waitForEvent=async()=>{
+    const p=children.at(-1).params;
+    if(p.name==='voice')return {payload:{ok:false,error:'Stop test after voice instructions'}};
+    return {payload:{ok:true,value:p.name==='script'?script:{passed:true,findings:[]}}};
+  };
+  try{
+    await assert.rejects(new GenerationWorkflow({},env).run({instanceId:'fixture',payload:{videoId:'a'.repeat(32)}},runner),/Stop test after voice/);
+    assert.deepEqual(children.map(c=>c.params.name),['script','qa','voice']);
+    const writer=children[0].params.data.prompt;const review=children[1].params.data.prompt;const director=children[2].params.data.prompt;
+    const audioSkill=contract.skills['audio_direction.md'];assert.ok(audioSkill.length>0);
+    assert.ok(!writer.includes(audioSkill));assert.ok(director.includes(audioSkill));
+    assert.match(writer,/complete self-contained engaging hook/);
+    assert.match(writer,/no robotic fragments or rigid word quotas per image/);
+    assert.match(writer,/creative proposals, NOT evidence/);
+    assert.match(writer,/no square-bracket audio tags or stage directions/);
+    assert.match(review,/Removing unsupported details or speculative applications is allowed/);
+    assert.match(review,/Inspect actual final narration, not just an empty flagged_claims list/);
   }finally{globalThis.fetch=original;}
 });

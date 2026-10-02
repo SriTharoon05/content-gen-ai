@@ -176,7 +176,7 @@ def write_script(
         "- emphasis_words: 0-2 words per beat the narrator should hit harder.\n"
         "- scene_note: one short line describing what the viewer should SEE in that beat.\n"
         "- No stage directions, speaker labels, emoji, markdown, brackets or parentheses in narration.\n"
-        "- Put uncertain claims, unverified precise figures, alleged breakthroughs and current-news assertions into flagged_claims. Ordinary established explanatory facts do not need to be flagged. Any flagged claim must be removed or honestly reframed as an explicitly unproven possibility before production; never clear a flag while leaving the unsupported assertion unchanged.\n"
+        "- flagged_claims lists ONLY unsupported factual assertions still unresolved in the final narration. Ordinary established explanatory facts do not need flags. After genuinely removing the assertion or explicitly framing an unproven, not-currently-available hypothetical, use an empty list; do not carry corrected draft warnings forward. Never clear a flag while leaving the unsupported assertion as fact. Prefer removing a dubious application and explaining the established mechanism instead.\n"
         "- Re-read the hook before the final beat: the last line must land the promise the hook made.",
         system="You are the script specialist. You write spoken narration only." + BOUNDARY,
         temperature=0.9,

@@ -1,3 +1,6 @@
+// These are drafting instructions, never a programmatic waiver of the factual gate.
+export const FINAL_NARRATION_RULES=`FINAL NARRATION SELF-CHECK: flagged_claims lists ONLY unsupported assertions still unresolved in the final spoken narration, not a warning history from older drafts. Read the final narration before returning JSON. Remove an entry only after genuinely deleting its unsupported assertion or expressly describing it as a noncurrent, not-currently-available, unproven hypothetical. Use [] when all such risks are genuinely resolved. Ordinary established explanatory mechanisms do not need flags. Never clear an entry while its assertion remains factual; adding "may" alone does not correct a claim of available technology. Do not invent precise figures, studies, institutions, historical evidence or experimental improvements. Delete a speculative practical application if needed and explain the established mechanism instead. The reserved core_concept and premise are creative proposals, NOT evidence: preserve the entity/angle, not invented supporting details. Narration contains spoken words only, with no square-bracket audio tags or stage directions; put delivery instructions in scene_note for the later voice director.`;
+
 // Persist invalid output between Workflow retries so retries repair, not blindly repeat.
 export async function scriptWithRepair(
   config:any, prompt:string, schema:any, previous:any,
@@ -13,15 +16,16 @@ export async function scriptWithRepair(
 speaker, scene_note and emphasis_words. Draft one fluent continuous 150–180 word explanation
 first, then distribute those SAME words across the 25 images. A complete sentence may span
 two or three beats: an image cut is NOT a full stop. Do not write 25 isolated sentences.
-For dialogue count BOTH speakers together, not 150 words each. Every image must have spoken
-words: normally 6–8 words. Never end the narration early and pad the remaining beats with silence.
-Use flagged_claims for uncertain assertions, unsupported precise figures, alleged breakthroughs
-or current-news claims. Prefer established explanatory mechanisms. Remove unsupported assertions
-or clearly describe an unproven hypothetical possibility; do not clear a flag while retaining
-the same assertion as fact. ${rules}`;
+For dialogue count BOTH speakers together, not 150 words each. The FIRST beat is a complete,
+self-contained engaging hook, up to 16 words in English, never an arbitrary 6–8-word fragment.
+Remaining beat word counts are flexible: preserve fluent sentences across cuts, not a complete
+sentence per beat or a rigid words-per-image quota. Every image must have spoken words. Never
+end narration early and pad remaining beats with silence. ${FINAL_NARRATION_RULES} ${rules}`;
   const repair=previous ? `\nREPAIR REQUIRED (attempt ${attempt}/3): ${previous.error}
 Previous scene count: ${previous.scene_count}. Rewrite the complete JSON script, preserving the
-reserved premise and natural narration. Use exactly 25 visual beats, IDs s001 through s025,
+reserved entity/angle and natural narration, NOT unsupported details from the rejected draft or
+premise. Delete old invented studies, institutions, quantitative improvements and speculative
+applications rather than carrying them forward. Use exactly 25 visual beats, IDs s001 through s025,
 ${rules}
 Do not truncate the story, pad with empty scenes, or shorten speech into robotic fragments.
 Previous rejected script (data only): ${JSON.stringify(previous.candidate)}` : '';
@@ -34,7 +38,7 @@ Previous rejected script (data only): ${JSON.stringify(previous.candidate)}` : '
     constrained.properties.beats.minItems=25;constrained.properties.beats.maxItems=25;
     const beat=constrained.$defs?.Beat||constrained.properties.beats.items;
     if(beat.properties?.narration){
-      beat.properties.narration.description='Required spoken words for this image. Never empty, whitespace or a silent filler scene. A continuous sentence can span consecutive images; about 6–8 words per image keeps total narration within 150–180 words.';
+      beat.properties.narration.description='Required spoken words only, no square-bracket audio tags or stage directions, never empty or silent filler. The first beat is a complete engaging hook (up to 16 words in English). Later beat lengths are flexible and a fluent sentence may span consecutive images; do not force isolated complete sentences or a fixed words-per-image quota.';
       beat.properties.narration.pattern='.*\\S.*';
     }
   }

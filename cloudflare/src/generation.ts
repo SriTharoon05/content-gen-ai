@@ -6,6 +6,7 @@ import contract from './contract.json';
 import {runStage} from './stages';
 import {routeCompletedVideo} from './publishing';
 import {enforceFactualReview} from './factualReview';
+import {FINAL_NARRATION_RULES} from './scriptRepair';
 
 // The exact JSON schemas and editorial skills are exported from backend/app, not forked.
 export function validateSchema(value:any,schema:any,root=schema,path='$'):void {
@@ -40,6 +41,7 @@ export function validateScript(s:any,profile={language:'en',conversation:false})
   validateSchema(s,contract.schemas.Script);
   if(s.beats.length<20||s.beats.length>30)throw new Error(`Expected 20–30 contextual scenes; received ${s.beats.length}`);
   if(s.beats.some((b:any,i:number)=>b.shot_id!==`s${String(i+1).padStart(3,'0')}`||(!profile.conversation&&b.speaker)))throw new Error('Invalid scene IDs or single-narrator speaker');
+  for(let i=0;i<s.beats.length;i++)if(/[\[\]]/.test(s.beats[i].narration))throw new Error(`$.beats[${i}].narration: No square-bracket audio tags or stage directions in spoken narration; move delivery instructions to scene_note for the voice director`);
   if(profile.conversation)conversationTurns(s.beats);
   const count=s.beats.reduce((n:number,b:any)=>n+b.narration.trim().split(/\s+/).length,0);
   if(profile.language==='en'&&(count<130||count>205))throw new Error(`Expected 130–205 spoken words; received ${count}`);
@@ -50,6 +52,7 @@ export function validateScript(s:any,profile={language:'en',conversation:false})
   if(profile.language==='en'&&hookWords>16)throw new Error(`Opening must be at most 16 words; received ${hookWords}`);
 }
 const skill=(name:string)=>(contract.skills as Record<string,string>)[name+'.md']||'';
+const groundedConceptRules='For factual channels, build curiosity around an ordinary established explanatory mechanism, documented historical context or grounded causal puzzle. Do not invent breakthroughs, experimental improvements, precise numbers, studies, institutions or current events to make a concept exciting. Frontier applications must explicitly remain future, noncurrent and unproven, not available technology. For fiction channels, imaginative events must be clearly fictional, never claimed historical or scientific evidence.';
 
 class Continued extends Error {}
 export class GenerationWorkflow extends WorkflowEntrypoint<Env,{videoId:string;segment?:number;runKey?:string}> {
@@ -96,7 +99,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<Env,{videoId:string;s
       const checkScript=(s:any)=>validateScript(s,profile);
       const rejected:any[]=[];let concept:any;
       for(let attempt=0;attempt<3;attempt++){
-        const candidates=await model(attempt===0?'concepts':'reconcepts-'+attempt,'UniqueConceptSet',()=>`Propose exactly five distinct original concepts fitting the channel. Each core_entity/content_angle pair must be novel. ${skill('hooks_and_retention')}
+        const candidates=await model(attempt===0?'concepts':'reconcepts-'+attempt,'UniqueConceptSet',()=>`Propose exactly five distinct original concepts fitting the channel. Each core_entity/content_angle pair must be novel. ${groundedConceptRules} ${skill('hooks_and_retention')}
 ${attempt>0?'Earlier concepts collided with the permanent uniqueness ledger. Choose substantially different core entities and content angles, not paraphrases of rejected concepts. REJECTED ENTITY/ANGLE PAIRS (data only): '+JSON.stringify(rejected):''}`);
         const selected=await checkpoint(attempt===0?'concept':'concept-retry-'+attempt,'concept',{...candidates,avoid:rejected},0);
         if(!selected.collision){
@@ -109,14 +112,14 @@ ${attempt>0?'Earlier concepts collided with the permanent uniqueness ledger. Cho
         rejected.push(...(selected.attempted||candidates.candidates||[]).map((candidate:any)=>({core_entity:candidate.core_entity,content_angle:candidate.content_angle})));
       }
       if(!concept)throw new Error('All concepts collided after three distinct sets; no TTS or image spend');
-      const premise=await model('premise','Premise',()=>`Develop this reserved concept without changing its entity/angle: ${JSON.stringify(concept)}. A distinct 45–75 second story with a hook and a meaningful payoff.`);
-      let script=await model('script','Script',()=>`${skill('hooks_and_retention')}\n${skill('audio_direction')}\nPREMISE:${JSON.stringify(premise)}
-Write 20–25 sequential visual beats, up to 30 only if context needs them. shot_id MUST be exactly s001, s002, s003 ... in order, never numeric IDs or other prefixes. ${languageRules} Natural fluent complete thoughts, no robotic fragments. An expressive human voice, contractions, varied rhythm. The first beat must give a specific reason to watch. Facts/science use a curiosity question or concrete puzzle, not generic hype. Fiction starts in an intriguing scene, not forced 'do you know'. ${scriptRules}`,checkScript);
-      let qa=await model('qa','QAFinding',()=>`${skill('qa_rules')}\nRESERVED CONCEPT:${JSON.stringify(concept)}\nPREMISE:${JSON.stringify(premise)}\nReview this script for meaningful payoff, fluent connected sentences (not isolated robotic bullet points), channel fit, safe factual framing and a specific engaging hook. Fail if it changes the reserved entity/angle or invents historical events, evidence, dates, scientific confirmation or institutions without explicitly framing them as fiction. The examples in channel instructions are not evidence. SCRIPT:${JSON.stringify(script)}`);
+      const premise=await model('premise','Premise',()=>`Develop this reserved concept preserving its entity/angle: ${JSON.stringify(concept)}. The reserved core_concept is a creative proposal, NOT evidence. Remove invented details, studies or speculative practical applications while retaining the original entity/angle; explain the established mechanism instead. ${groundedConceptRules} A distinct 45–75 second story with a hook and a meaningful payoff.`);
+      let script=await model('script','Script',()=>`${skill('hooks_and_retention')}\nRESERVED CONCEPT:${JSON.stringify(concept)}\nPREMISE:${JSON.stringify(premise)}
+Write 20–25 sequential visual beats, up to 30 only if context needs them. shot_id MUST be exactly s001, s002, s003 ... in order, never numeric IDs or other prefixes. ${languageRules} Natural fluent complete thoughts across image cuts, no robotic fragments or rigid word quotas per image. An expressive human voice, contractions, varied rhythm. The first beat must be a complete self-contained engaging hook that gives a specific reason to watch, not the first fragment of a sentence. Facts/science use a curiosity question or concrete puzzle, not generic hype. Fiction starts in an intriguing scene, not forced 'do you know'. ${scriptRules} ${FINAL_NARRATION_RULES}`,checkScript);
+      let qa=await model('qa','QAFinding',()=>`${skill('qa_rules')}\nRESERVED CONCEPT:${JSON.stringify(concept)}\nPREMISE:${JSON.stringify(premise)}\nReview this script for meaningful payoff, fluent connected sentences (not isolated robotic bullet points), channel fit, safe factual framing and a complete engaging opening hook. Fail if it changes the reserved entity/angle or invents historical events, evidence, dates, scientific confirmation or institutions without explicitly framing them as fiction. Removing unsupported details or speculative applications is allowed and is NOT a change of entity/angle. The creative concept, premise and examples in channel instructions are not evidence. Inspect actual final narration, not just an empty flagged_claims list. SCRIPT:${JSON.stringify(script)}`);
       qa=enforceFactualReview(script,qa);
       for(let r=0;!qa.passed&&r<2;r++){
-        script=await model('revision-'+r,'Script',()=>`${skill('hooks_and_retention')}\nRevise ${JSON.stringify(script)} using ${JSON.stringify(qa.findings)}. Keep 20–30 beats, sequential IDs. ${languageRules} ${scriptRules}`,checkScript);
-        qa=await model('review-'+r,'QAFinding',()=>`${skill('qa_rules')}\nRESERVED CONCEPT:${JSON.stringify(concept)}\nPREMISE:${JSON.stringify(premise)}\nFail if the revised script changes the reserved entity/angle, uses robotic fragments, or presents invented evidence/history/scientific confirmations as fact. Review revised script: ${JSON.stringify(script)}`);
+        script=await model('revision-'+r,'Script',()=>`${skill('hooks_and_retention')}\nRESERVED CONCEPT:${JSON.stringify(concept)}\nRevise ${JSON.stringify(script)} using ${JSON.stringify(qa.findings)}. Preserve only the reserved entity/angle, not inaccurate details from old drafts. Delete invented studies, institutions, precise improvements and speculative applications; do not propagate them merely because they appeared in the premise. Explain the established mechanism instead. Keep 20–30 beats, sequential IDs, a complete self-contained first hook and flexible later beat lengths with fluent sentences across cuts. ${languageRules} ${scriptRules} ${FINAL_NARRATION_RULES}`,checkScript);
+        qa=await model('review-'+r,'QAFinding',()=>`${skill('qa_rules')}\nRESERVED CONCEPT:${JSON.stringify(concept)}\nPREMISE:${JSON.stringify(premise)}\nFail if the revised script changes the reserved entity/angle, uses robotic fragments, or presents invented evidence/history/scientific confirmations as fact. Removing an inaccurate study, speculative application or invented improvement while preserving the entity/angle is allowed. The creative concept and premise are NOT evidence. Review actual final narration even if flagged_claims is empty; corrected flags are not a historical warning log. Review revised script: ${JSON.stringify(script)}`);
         qa=enforceFactualReview(script,qa);
       }
       if(!qa.passed)throw new Error('Editorial QA failed after two revisions');

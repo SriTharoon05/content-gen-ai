@@ -41,6 +41,8 @@ class Beat(BaseModel):
     @field_validator("narration")
     @classmethod
     def single_line(cls, value: str) -> str:
+        if TAG_RE.search(value):
+            raise ValueError('Narration must contain spoken words only; put audio tags in VoiceDirection, not script beats')
         return " ".join(value.split())
 
 
@@ -48,7 +50,12 @@ class Script(BaseModel):
     hook_kind: HookKind
     hook: str = Field(min_length=8, max_length=160)
     beats: list[Beat] = Field(min_length=6, max_length=80)
-    flagged_claims: list[str] = Field(default_factory=list)
+    flagged_claims: list[str] = Field(default_factory=list, description=(
+        'Only unsupported factual assertions that remain unresolved in the final spoken narration. '
+        'Use an empty list after genuinely removing the assertion or explicitly framing a '
+        'not-currently-available, unproven hypothetical. Ordinary established explanatory facts '
+        'do not need flags. Never clear a flag while retaining the unsupported assertion as fact.'
+    ))
     reasoning: str = ""
 
     @model_validator(mode="after")

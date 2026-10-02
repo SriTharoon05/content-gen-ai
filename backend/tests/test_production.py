@@ -11,6 +11,21 @@ from app.key_pool import KeyPool, NoKeysConfigured
 
 
 class ProductionTests(unittest.TestCase):
+    def test_script_narration_rejects_delivery_tags(self):
+        from app.schemas import Beat
+        from pydantic import ValidationError
+        with self.assertRaisesRegex(ValidationError, 'spoken words only'):
+            Beat(shot_id='s001', narration='[serious] Why does your camera miss this?')
+        self.assertEqual(Beat(shot_id='s001', narration='Why does your camera miss this?').narration,
+                         'Why does your camera miss this?')
+
+    def test_flag_contract_describes_remaining_risks_not_old_drafts(self):
+        from app.schemas import Script
+        description = Script.model_json_schema()['properties']['flagged_claims']['description']
+        self.assertIn('remain unresolved', description)
+        self.assertIn('empty list after genuinely removing', description)
+        self.assertIn('Never clear a flag while retaining', description)
+
     def test_conversation_cast_is_puck_and_zephyr(self):
         from app import pipeline
         from app.schemas import spoken_text

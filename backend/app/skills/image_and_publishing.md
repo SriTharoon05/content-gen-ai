@@ -2,7 +2,7 @@
 
 Every image is one complete full-frame 9:16 composition in native 1K output. No panels, collage,
 blank footer or embedded subtitles. Keep important subjects inside a 10% margin. Final video is
-720x1280 at 24 fps. Captions must respect bottom UI safe space.
+720x1280 at 30 fps. Captions must respect bottom UI safe space.
 
 ## Prompt quality (critical — the image model is small)
 The renderer is a low-parameter turbo model. Vague prompts produce mush. Every prompt must state,

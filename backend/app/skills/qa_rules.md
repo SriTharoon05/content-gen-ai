@@ -22,3 +22,8 @@ the script is engaging. Remove unsupported precise numbers and claimed breakthro
 describe an unproven possibility without presenting it as available technology. Prefer an accurate
 explanation of a well-established mechanism over a spectacular but unsupported future claim.
 Do not clear a flag while retaining the same unsupported assertion in narration.
+`flagged_claims` is a list of remaining unresolved assertions, not a history of warnings from older
+drafts. After a risk is genuinely removed or explicitly framed as an unproven hypothetical, the
+writer should remove the corrected entry. Ordinary established mechanisms need no warning by
+default. Removing a dubious practical application is preferable to turning an entire explainer
+into vague hedges. Review the actual narration, not just whether its flag list is empty.
