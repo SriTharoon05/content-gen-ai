@@ -8,18 +8,31 @@ import type {Env} from './types';
 import {scriptWithRepair} from './scriptRepair';
 
 export interface StageParams {videoId:string;name:string;op:string;data:any;retries:number;parentId?:string;parentKind?:'generation'|'media';}
+export function stageEventTimeout(retries:number):`${number} minutes` {
+  // A child attempt may run for 15 minutes. Two retries plus their backoff
+  // cannot fit inside the previous fixed 16-minute parent deadline.
+  return `${16*(Math.max(0,Math.min(3,Math.trunc(retries)))+1)} minutes`;
+}
 export async function runStage(env:Env,step:WorkflowStep,id:string,p:StageParams):Promise<any> {
   await step.do('start-'+p.name,async()=>{
     try{await env.GENERATION_STAGE.create({id,params:p});}
     catch(e){try{await(await env.GENERATION_STAGE.get(id)).status();}catch{throw e;}}
   });
   try {
-    const event=await step.waitForEvent<any>('done-'+p.name,{type:'stage-'+p.name,timeout:'16 minutes'});
+    const event=await step.waitForEvent<any>('done-'+p.name,{type:'stage-'+p.name,timeout:stageEventTimeout(p.retries)});
     if(!event.payload.ok)throw new Error(p.name+': '+event.payload.error);
     return event.payload.value;
   } catch(error) {
     // One reconciliation lookup if callback delivery was lost; no high-frequency binding polling.
-    const state=await step.do('reconcile-'+p.name,async()=>{const s=await(await env.GENERATION_STAGE.get(id)).status();return {status:s.status,output:s.output??null};});
+    const state=await step.do('reconcile-'+p.name,async()=>{
+      // Checkpoints can commit before notification delivery fails. Recover them
+      // even if the notification step made the child appear errored.
+      if(!p.op.startsWith('media-')||p.op==='media-submit'){
+        const saved=await generation(env,'status',p.videoId);
+        if(Object.prototype.hasOwnProperty.call(saved.steps||{},p.name))return {status:'complete',output:saved.steps[p.name]};
+      }
+      const s=await(await env.GENERATION_STAGE.get(id)).status();return {status:s.status,output:s.output??null};
+    });
     if(state.status==='complete')return state.output;
     throw error;
   }
@@ -44,11 +57,16 @@ export class GenerationStageWorkflow extends WorkflowEntrypoint<Env,StageParams>
     const value=await step.do('execute',{retries:{limit:p.retries,delay:'30 seconds',backoff:'exponential'},timeout:'15 minutes'},async()=>{
       const {videoId:id,name,op,data}=p;
       // These child stages each get their own Free-plan external-subrequest budget.
-      if(op==='media-inspect'){await expire(this.env,id);const t=await loadTask(this.env,id);return {status:t.status,result:t.result_json};}
+      if(op==='media-inspect'){await expire(this.env,id);const t=await loadTask(this.env,id);return {status:t.status,result:t.result_json,pipelineId:t.pipeline_id||''};}
       if(op==='media-trigger'){
+        // Step retries/replays must not buy another CircleCI run after a known
+        // accepted trigger, including the period before its worker claims the DB.
+        const task=await loadTask(this.env,id);
+        if(task.pipeline_id)return task.pipeline_id;
+        if(task.status!=='queued')return null;
         const r=await fetch(`https://circleci.com/api/v2/project/${this.env.CIRCLECI_PROJECT_SLUG}/pipeline/run`,{
           method:'POST',headers:{'Circle-Token':this.env.CIRCLECI_TOKEN,'Content-Type':'application/json'},
-          body:JSON.stringify({definition_id:this.env.CIRCLECI_PIPELINE_DEFINITION_ID,config:{branch:this.env.CIRCLECI_BRANCH},checkout:{branch:this.env.CIRCLECI_BRANCH},parameters:{render_task_id:id}})});
+          body:JSON.stringify({definition_id:this.env.CIRCLECI_PIPELINE_DEFINITION_ID,config:{branch:this.env.CIRCLECI_BRANCH},checkout:{branch:this.env.CIRCLECI_BRANCH},parameters:{render_task_id:id}}),signal:AbortSignal.timeout(60000)});
         if(!r.ok)throw new Error('CircleCI trigger HTTP '+r.status);
         const b=await r.json() as any;if(!b.id)throw new Error('Missing pipeline ID');await triggered(this.env,id,b.id);return b.id;
       }

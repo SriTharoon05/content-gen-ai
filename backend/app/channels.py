@@ -83,8 +83,8 @@ CHANNELS = [
         "tagline": "The past still has secrets",
         "niche": "History, mysteries and forgotten stories.",
         "strategy_json": {
-            "voice_name": "Enceladus",
-            "voice": "hushed, atmospheric, deliberate",
+            "voice_name": "Puck",
+            "voice": "clear, warm, expressive historical storyteller; no husky or whispered delivery",
             "narrative": "the setting, the mystery, the evidence, the unresolved question",
             "visual_style": "candlelit period realism, heavy chiaroscuro, dust motes, desaturated amber and slate grade",
             "audience": "general adult",

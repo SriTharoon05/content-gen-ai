@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {parseJSON,speechChunks,pcmWav,textModel,merge,image as generateImage} from '../src/providers';
+import {parseJSON,speechChunks,pcmWav,textModel,merge,image as generateImage,geminiSpeech} from '../src/providers';
 import type {Env} from '../src/types';
 test('JSON rejects trailing content but accepts a single fenced object',()=>{
   assert.deepEqual(parseJSON('```json\n{"a":1}\n```'),{a:1});
@@ -13,6 +13,23 @@ test('Orpheus chunks never exceed documented 200 characters',()=>{
 test('Gemini PCM uses correct mono 24kHz WAV header',()=>{
   const wav=pcmWav(new Uint8Array(48000));assert.equal(wav.length,48044);
   assert.equal(wav.readUInt32LE(24),24000);assert.equal(wav.readUInt32LE(40),48000);
+});
+
+test('selected Groq speech avoids unnecessary Gemini calls',async()=>{
+  const original=globalThis.fetch;globalThis.fetch=async()=>{throw new Error('No request expected');};
+  try{assert.equal(await geminiSpeech({} as Env,{settings:{models:{tts:'canopylabs/orpheus-v1-english'}}},'hello','warm'),null);}
+  finally{globalThis.fetch=original;}
+});
+
+test('legacy breathy narrator uses clear voice and selected Gemini model',async()=>{
+  const original=globalThis.fetch;let sent:any,url='';
+  globalThis.fetch=async(u,init)=>{url=String(u);sent=JSON.parse(String(init?.body));return Response.json({candidates:[]});};
+  try{
+    await geminiSpeech({} as Env,{channel:{strategy_json:{voice_name:'Enceladus'}},settings:{models:{tts:'gemini-2.5-flash-preview-tts'},voice:{},keys:{gemini_free:['fixture']}}},'Exact words.','clear');
+    assert.match(url,/gemini-2.5-flash-preview-tts/);
+    assert.equal(sent.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName,'Puck');
+    assert.match(sent.contents[0].parts[0].text,/never husky/);
+  }finally{globalThis.fetch=original;}
 });
 test('settings preserve defaults while applying nested owner values',()=>{
   assert.deepEqual(merge({a:{b:1,c:2}},{a:{b:3}}),{a:{b:3,c:2}});

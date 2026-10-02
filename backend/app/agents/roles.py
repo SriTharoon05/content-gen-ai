@@ -231,7 +231,7 @@ def direct_voice(
         f"- speech_tempo: {tempo_hint} is the operator's target. Adjust within 0.9-1.25 only if the story "
         "truly needs it.\n"
         "- tagged_transcript: the transcript with inline audio tags in square brackets, in ENGLISH even "
-        "when the narration is not. Use them to shape delivery: [excited], [whispers], [serious], "
+        "when the narration is not. Never direct husky, gravelly, breathy or whispered delivery. Use clear delivery tags: [excited], [warm], [serious], "
         "[curious], [sighs], [very fast], [slowly]. Put a tag on the hook, on the turn, and on the final "
         "line at minimum; add more where the story earns them. Do not overdo it — roughly one tag per "
         "two or three sentences.\n\n"

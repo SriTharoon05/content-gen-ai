@@ -3,7 +3,7 @@
 **Tagline:** The past still has secrets
 **Niche:** History, mysteries and forgotten stories.
 
-- Narrator voice: hushed, atmospheric, deliberate
+- Narrator voice: clear, warm, expressive historical storyteller; never husky or whispered
 - Story shape: the setting, the mystery, the evidence, the unresolved question
 - Visual style block (append to every image prompt): candlelit period realism, heavy chiaroscuro, dust motes, desaturated amber and slate grade
 - Audience: general adult

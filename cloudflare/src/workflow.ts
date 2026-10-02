@@ -20,7 +20,7 @@ export class MediaWorkflow extends WorkflowEntrypoint<Env, {taskId: string;notif
         });
         return {taskId:id,status};
       }
-      if (status === 'queued' && round<3) {
+      if (status === 'queued' && !inspected.pipelineId && round<3) {
         try {await runStage(this.env,step,`${id}-trigger-${round}`,{videoId:id,name:`trigger-${round}`,op:'media-trigger',data:{},retries:2,parentId:event.instanceId,parentKind:'media'});} catch {
           await step.do(`trigger-error-${round}`, async () => {
             await triggerFailed(this.env,id);

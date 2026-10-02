@@ -32,7 +32,18 @@ async function body(request: Request): Promise<any> {
 
 export default {
   async scheduled(_event:ScheduledController,env:Env,ctx:ExecutionContext){
-    ctx.waitUntil((async()=>{await tick(env);await reconcilePublishing(env);await newsTick(env);})());
+    ctx.waitUntil((async()=>{
+      const failures:unknown[]=[];
+      // Keep the bounded sequential subrequest budget, but isolate independent
+      // outboxes: a video scheduler failure must not suppress publishing or news.
+      for(const [name,run] of [['videos',()=>tick(env)],['publishing',()=>reconcilePublishing(env)],['news',()=>newsTick(env)]] as const){
+        try{await run();}catch(error){
+          failures.push(error);
+          console.error(JSON.stringify({event:'cron_task_failure',task:name,kind:error instanceof Error?error.name:'Unknown'}));
+        }
+      }
+      if(failures.length)throw new AggregateError(failures,'One or more cron tasks failed');
+    })());
   },
   async fetch(request: Request, env: Env): Promise<Response> {
     const origin = request.headers.get('Origin') || '';

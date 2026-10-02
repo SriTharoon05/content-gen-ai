@@ -20,17 +20,19 @@ jobs:
       - checkout
       - restore_cache:
           keys:
-            - cf-media-py312-v1-{{ checksum "backend/requirements.txt" }}
+            - cf-media-py312-v2-{{ arch }}-{{ checksum "backend/requirements-media.txt" }}
       - run:
           name: Install canonical media dependencies and fonts
           command: |
-            python -m venv /tmp/media-venv
-            /tmp/media-venv/bin/pip install -r backend/requirements.txt
+            if [ ! -x /tmp/media-venv/bin/python ]; then
+              python -m venv /tmp/media-venv
+              /tmp/media-venv/bin/pip install --disable-pip-version-check -r backend/requirements-media.txt
+            fi
             /tmp/media-venv/bin/python backend/scripts/setup_caption_assets.py
       - save_cache:
-          key: cf-media-py312-v1-{{ checksum "backend/requirements.txt" }}
+          key: cf-media-py312-v2-{{ arch }}-{{ checksum "backend/requirements-media.txt" }}
           paths:
-            - ~/.cache/pip
+            - /tmp/media-venv
       - run:
           name: Execute media only, no generation or publishing
           no_output_timeout: 60m

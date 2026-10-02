@@ -4,6 +4,15 @@ from . import media
 from .settings_store import render_settings
 
 
+def input_path(root, name):
+    if not isinstance(name,str) or not name or name.startswith('/') or '\\' in name or ':' in name or '..' in name.split('/'):
+        raise ValueError('Unsafe render asset path')
+    path = (root / name).resolve()
+    if not path.is_relative_to(root.resolve()):
+        raise ValueError('Unsafe render asset path')
+    return path
+
+
 def execute(manifest, root: Path, output: Path):
     if manifest.get('version') != 1:
         raise ValueError('Unsupported render manifest version')
@@ -15,7 +24,7 @@ def execute(manifest, root: Path, output: Path):
         with prepared_music(track, manifest.get('music_start'), manifest.get('music_end')) as music:
             if manifest['operation'] == 'assemble':
                 timeline = media.Timeline(**manifest['timeline'])
-                media.assemble([root / name for name in manifest['images']], root / 'narration.wav',
+                media.assemble([input_path(root, name) for name in manifest['images']], root / 'narration.wav',
                     timeline, manifest['transitions'], root / 'captions.ass', output, root / 'clips', music,
                     manifest['intensity'], manifest['ducking'], 0)
                 expected = timeline.duration
@@ -35,4 +44,4 @@ def execute(manifest, root: Path, output: Path):
         if abs(float(video['duration']) - expected) > 1/fps + .001:
             raise ValueError('Output frame timing differs from narration')
         return {'duration':float(video['duration']), 'fps':fps, 'bytes':output.stat().st_size,
-                'frames':int(video.get('nb_frames',0))}
+                'frames':int(video.get('nb_frames',0)), 'width':video['width'], 'height':video['height']}

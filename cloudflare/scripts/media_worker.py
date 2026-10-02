@@ -3,6 +3,7 @@
 No provider generation, publishing, or database access is allowed in this process.
 """
 import hashlib
+from concurrent.futures import ThreadPoolExecutor
 import os
 from pathlib import Path
 import secrets
@@ -32,24 +33,25 @@ def execute_media(manifest, root, output):
         rate = float(manifest.get('playback_rate', 1.0))
         if not .75 <= rate <= 1.25:
             raise ValueError('Playback rate outside supported range')
-        source = root / 'source.audio'
         parts = manifest.get('sources', ['source.audio'])
+        if not parts:
+            raise ValueError('Narration sources required')
+        sources = [asset_path(root, name) for name in parts]
+        source = sources[0]
         if len(parts) > 1:
             import wave
             source = root / 'joined.wav'
             shape = None
             with wave.open(str(source), 'wb') as joined:
-                for name in parts:
-                    part = (root / name).resolve()
-                    if not part.is_relative_to(root.resolve()):
-                        raise ValueError('Unsafe audio source')
+                for part in sources:
                     with wave.open(str(part),'rb') as audio:
                         params = (audio.getnchannels(),audio.getsampwidth(),audio.getframerate())
                         if shape is None:
                             shape=params
                             joined.setnchannels(shape[0]); joined.setsampwidth(shape[1]); joined.setframerate(shape[2])
                         if shape!=params: raise ValueError('Incompatible narration chunks')
-                        joined.writeframes(audio.readframes(audio.getnframes()))
+                        while chunk := audio.readframes(65536):
+                            joined.writeframesraw(chunk)
         with render_settings(manifest['settings']):
             seconds = pace_and_trim(source, output, rate, 120, 250)
         measured = probe_duration(output)
@@ -107,7 +109,7 @@ def prepare_script_bundle(manifest, root):
             captions=measured_captions(heard,total)
         spans,kept=beat_spans(reference,[len(b.narration.split()) for b in script.beats],total)
         transitions=[plan.transitions[i].normalised().model_dump() for i in kept]
-        timeline=build_timeline(spans,transitions,30,total)
+        timeline=build_timeline(spans,transitions,int(manifest['settings']['video']['fps']),total)
         _,pitches=analyze_audio(audio,root)
         emphasis={normalized(w) for b in script.beats for w in b.emphasis_words}
         stats=write_ass(captions,pitches,emphasis,root/'captions.ass',total,phrase_mode=phrase_mode)
@@ -118,24 +120,83 @@ def prepare_script_bundle(manifest, root):
             'transitions':transitions,'timeline':asdict(timeline)}
 
 
+def asset_path(root, name):
+    if not isinstance(name, str) or not name or name.startswith('/') or '\\' in name or ':' in name or '..' in name.split('/'):
+        raise ValueError('Unsafe asset path')
+    path = (root / name).resolve()
+    if not path.is_relative_to(root.resolve()) or path == root.resolve():
+        raise ValueError('Unsafe asset path')
+    return path
+
+
 def download_assets(manifest, root):
+    # Validate the entire manifest before making any network requests. Four streaming
+    # transfers overlap network latency without holding images/audio in RAM.
+    assets = []
     for name, entry in manifest['files'].items():
-        path = (root / name).resolve()
-        if not path.is_relative_to(root.resolve()) or '\\' in name or ':' in name:
-            raise ValueError('Unsafe asset path')
+        path = asset_path(root, name)
         url = urlsplit(entry['url'])
-        if url.scheme != 'https' or url.username or url.password:
+        if url.scheme != 'https' or not url.hostname or url.username or url.password:
             raise ValueError('Unsafe asset URL')
-        path.parent.mkdir(parents=True, exist_ok=True)
-        checksum = hashlib.sha256()
-        with httpx.stream('GET', entry['url'], timeout=180, follow_redirects=False) as response:
+        checksum = entry.get('sha256', '')
+        if len(checksum) != 64 or any(c not in '0123456789abcdef' for c in checksum):
+            raise ValueError('Missing asset checksum')
+        assets.append((path, entry))
+    with httpx.Client(timeout=180, follow_redirects=False, limits=httpx.Limits(max_connections=4)) as client:
+        def download(asset):
+            path, entry = asset
+            path.parent.mkdir(parents=True, exist_ok=True)
+            partial = path.with_name(path.name + '.' + secrets.token_hex(6) + '.download')
+            try:
+                for attempt in range(3):
+                    checksum = hashlib.sha256()
+                    try:
+                        with client.stream('GET', entry['url']) as response:
+                            response.raise_for_status()
+                            with partial.open('wb') as target:
+                                for chunk in response.iter_bytes(chunk_size=65536):
+                                    target.write(chunk)
+                                    checksum.update(chunk)
+                        if checksum.hexdigest() != entry['sha256']:
+                            raise ValueError('Asset checksum mismatch')
+                        partial.replace(path)
+                        return
+                    except httpx.HTTPError as error:
+                        if (isinstance(error, httpx.HTTPStatusError) and error.response.status_code < 500
+                                and error.response.status_code != 429) or attempt == 2:
+                            raise
+                        time.sleep(2 ** attempt)
+            finally:
+                partial.unlink(missing_ok=True)
+        with ThreadPoolExecutor(max_workers=min(4, max(1,len(assets)))) as pool:
+            list(pool.map(download, assets))
+
+
+def upload_output(api, output, metrics):
+    mime = 'image/jpeg' if output.suffix == '.jpg' else 'audio/wav' if output.suffix == '.wav' else 'video/mp4'
+    for attempt in range(3):
+        capability = api('upload')
+        try:
+            with output.open('rb') as source:
+                response = httpx.post(capability['url'], data=capability['fields'],
+                    files={'file': (output.name, source, mime)}, timeout=300)
             response.raise_for_status()
-            with path.open('wb') as target:
-                for chunk in response.iter_bytes():
-                    target.write(chunk)
-                    checksum.update(chunk)
-        if checksum.hexdigest() != entry['sha256']:
-            raise ValueError('Asset checksum mismatch')
+            asset = response.json()
+            resource_type = 'image' if output.suffix == '.jpg' else 'video'
+            if (asset.get('public_id') != capability['fields']['public_id']
+                    or asset.get('resource_type') != resource_type or asset.get('type') != 'upload'
+                    or asset.get('format') != output.suffix.lstrip('.')
+                    or asset.get('bytes') != output.stat().st_size):
+                raise ValueError('Cloudinary upload does not match the canonical output')
+            if any(asset.get(key) != metrics[key] for key in ('width','height') if key in metrics):
+                raise ValueError('Cloudinary uploaded dimensions disagree with canonical output')
+            metrics['upload_verified'] = True
+            return
+        except httpx.HTTPError as error:
+            if (isinstance(error,httpx.HTTPStatusError) and error.response.status_code < 500
+                    and error.response.status_code != 429) or attempt == 2:
+                raise
+            time.sleep(2 ** attempt)
 
 
 def main():
@@ -182,30 +243,28 @@ def main():
                 print('Heartbeat unavailable; completion will retry.', flush=True)
     thread = threading.Thread(target=heartbeat, daemon=True)
     thread.start()
+    task_start = time.monotonic()
     try:
         manifest = claimed['manifest']
         with tempfile.TemporaryDirectory(prefix='cf-media-') as folder:
             root = Path(folder)
+            transfer_start = time.monotonic()
             download_assets(manifest, root)
+            download_seconds = time.monotonic() - transfer_start
             output = root / ('post.jpg' if manifest['operation']=='news_slide' else 'prepared.wav' if manifest['operation'] == 'prepare_audio' else 'final.mp4')
             from app.render_metrics import measure
             with measure() as metrics:
                 info = execute_media(manifest, root, output)
             metrics.update(info)
+            metrics['download_seconds'] = round(download_seconds,3)
             # Re-editing verifies immutable downloaded narration/final video just like images.
             with output.open('rb') as checksum_source:
                 metrics['sha256'] = hashlib.file_digest(checksum_source, 'sha256').hexdigest()
-            for attempt in range(3):
-                capability = api('upload')
-                try:
-                    with output.open('rb') as source:
-                        r = httpx.post(capability['url'], data=capability['fields'],
-                            files={'file': (output.name, source, 'image/jpeg' if output.suffix=='.jpg' else 'audio/wav' if output.suffix == '.wav' else 'video/mp4')}, timeout=300)
-                    r.raise_for_status()
-                    break
-                except httpx.HTTPError:
-                    if attempt == 2:
-                        raise
+            upload_start = time.monotonic()
+            upload_output(api, output, metrics)
+            metrics['upload_seconds'] = round(time.monotonic() - upload_start,3)
+            # Worker execution only, NOT CircleCI checkout/package/setup or queue time.
+            metrics['worker_seconds'] = round(time.monotonic() - task_start,3)
             api('complete', status='succeeded', metrics=metrics)
             print('Media succeeded:', metrics)
         return 0

@@ -127,7 +127,7 @@ class RemoteRenderTests(unittest.TestCase):
         config=yaml.safe_load((Path(__file__).resolve().parents[2]/'.circleci/config.yml').read_text())
         self.assertEqual(set(config['parameters']),{'render_task_id'})
         self.assertEqual(config['workflows']['render-request']['when']['and'][0],{'equal':['api','<< pipeline.trigger.type >>']})
-        self.assertEqual(config['jobs']['render-media']['resource_class'],'small')
+        self.assertEqual(config['jobs']['render-media']['resource_class'],'medium')
 
     def test_signed_download_url_has_storage_prefix(self):
         from app import storage

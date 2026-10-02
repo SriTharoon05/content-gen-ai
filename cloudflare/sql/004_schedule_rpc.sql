@@ -20,7 +20,7 @@ BEGIN
       WHERE id=p_task_id AND options_json->>'cf_schedule_date' IS NOT NULL;
     RETURN '{"saved":true}'::jsonb;
   END IF;
-  IF p_action='get' THEN RETURN jsonb_build_object('owner',control->>'scheduler_owner','schedule',coalesce(cfg->'schedule','{}')); END IF;
+  IF p_action='get' THEN RETURN jsonb_build_object('owner',control->>'scheduler_owner','render_guard_verified',coalesce(control->>'render_guard_verified'='true',false),'schedule',coalesce(cfg->'schedule','{}')); END IF;
   IF p_action='save' THEN
     IF p_payload->>'owner' NOT IN ('render','cloudflare') OR p_payload->>'owner' IS NULL THEN RAISE EXCEPTION 'Invalid scheduler owner'; END IF;
     IF p_payload->>'owner'='cloudflare' AND control->>'render_guard_verified' IS DISTINCT FROM 'true'
@@ -39,17 +39,23 @@ BEGIN
     RETURN '{"saved":true}'::jsonb;
   END IF;
   IF p_action<>'tick' THEN RETURN '{"error":"Unknown scheduler action","status":400}'::jsonb; END IF;
-  IF control->>'scheduler_owner'<>'cloudflare' OR NOT coalesce((cfg->'schedule'->>'enabled')::boolean,false) THEN RETURN '{"videos":[]}'::jsonb; END IF;
+  IF control->>'scheduler_owner'<>'cloudflare' THEN RETURN '{"videos":[]}'::jsonb; END IF;
+  -- Drain already-admitted work before checking today's window/enabled flag.
+  -- Otherwise a crash near the end of the four-hour window strands committed
+  -- videos forever. Switching scheduler owner still prevents new CF dispatches.
+  SELECT coalesce(jsonb_agg(jsonb_build_object('video_id',id)),'[]'::jsonb) INTO queued
+    FROM (SELECT id FROM videos WHERE options_json->>'cf_schedule_date' IS NOT NULL
+      AND state='CF_GENERATING' AND options_json->>'cf_schedule_submitted' IS DISTINCT FROM 'true'
+      ORDER BY created_at,id LIMIT 5) pending;
+  IF jsonb_array_length(queued)>0 THEN RETURN jsonb_build_object('videos',queued); END IF;
+  IF NOT coalesce((cfg->'schedule'->>'enabled')::boolean,false) THEN RETURN '{"videos":[]}'::jsonb; END IF;
   local_time:=(now() AT TIME ZONE 'UTC')+make_interval(mins=>coalesce((cfg->'schedule'->>'timezone_offset_minutes')::integer,330));
   start_time:=local_time::date+coalesce(cfg->'schedule'->>'run_at','10:00')::time;
   IF local_time<start_time THEN start_time:=start_time-interval '1 day'; END IF;
   IF local_time>=start_time+interval '4 hours' THEN RETURN '{"videos":[]}'::jsonb; END IF;
   run_day:=start_time::date::text;
   IF EXISTS(SELECT 1 FROM schedule_runs WHERE run_date=run_day) THEN
-    -- Recover a crash after DB commit but before Workflow submission; deterministic IDs dedupe.
-    RETURN jsonb_build_object('videos',coalesce((SELECT jsonb_agg(jsonb_build_object('video_id',id)) FROM videos
-      WHERE options_json->>'cf_schedule_date'=run_day AND state='CF_GENERATING'
-        AND options_json->>'cf_schedule_submitted' IS DISTINCT FROM 'true'),'[]'::jsonb));
+    RETURN '{"videos":[]}'::jsonb;
   END IF;
   model:=cfg->'models'->>'image_model';
   SELECT coalesce(sum(credits),0) INTO used FROM provider_calls WHERE provider='pollinations' AND status IN ('settled','reserved','uncertain');

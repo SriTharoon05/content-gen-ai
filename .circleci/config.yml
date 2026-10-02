@@ -22,17 +22,19 @@ jobs:
       - checkout
       - restore_cache:
           keys:
-            - media-py312-v1-{{ checksum "backend/requirements.txt" }}
+            - media-py312-v2-{{ arch }}-{{ checksum "backend/requirements-media.txt" }}
       - run:
           name: Install Python dependencies and canonical caption font
           command: |
-            python -m venv /tmp/media-venv
-            /tmp/media-venv/bin/pip install -r backend/requirements.txt
+            if [ ! -x /tmp/media-venv/bin/python ]; then
+              python -m venv /tmp/media-venv
+              /tmp/media-venv/bin/pip install --disable-pip-version-check -r backend/requirements-media.txt
+            fi
             /tmp/media-venv/bin/python backend/scripts/setup_caption_assets.py
       - save_cache:
-          key: media-py312-v1-{{ checksum "backend/requirements.txt" }}
+          key: media-py312-v2-{{ arch }}-{{ checksum "backend/requirements-media.txt" }}
           paths:
-            - ~/.cache/pip
+            - /tmp/media-venv
       - run:
           name: Claim and render one checkpointed task
           working_directory: ~/project/backend

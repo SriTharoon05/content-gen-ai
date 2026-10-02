@@ -1,4 +1,4 @@
-"""Orpheus narration with bounded chunks; quotas are shared across organization keys."""
+"""Orpheus narration with bounded chunks and independent-account key fallback."""
 import hashlib
 import io
 import json
@@ -49,33 +49,38 @@ def request_audio(text, model, voice):
     keys = cfg("keys", "groq", default=[])
     if not keys:
         raise RuntimeError("Add a Groq key in Settings")
-    # Keep one key for quota retries: rotating keys does not increase org limits.
+    # The configured keys belong to independent accounts. A failure must never
+    # cool down unrelated keys; only cool down after a complete sweep fails.
     with _lock, httpx.Client(timeout=180) as client:
-        for key in keys:
-            for attempt in range(3):
+        for attempt in range(3):
+            retry_delay = 1.0
+            for key in keys:
                 time.sleep(max(0, 6.2 - (time.monotonic() - _last_request)))
                 _last_request = time.monotonic()
-                response = client.post("https://api.groq.com/openai/v1/audio/speech",
-                    headers={"Authorization": f"Bearer {key}"},
-                    json={"model": model, "voice": voice, "input": text, "response_format": "wav"})
-                if response.status_code == 401:
-                    break  # a replacement credential is useful only for authentication failure
+                try:
+                    response = client.post("https://api.groq.com/openai/v1/audio/speech",
+                        headers={"Authorization": f"Bearer {key}"},
+                        json={"model": model, "voice": voice, "input": text, "response_format": "wav"})
+                except httpx.TransportError:
+                    continue
+                if response.status_code in (401, 403):
+                    continue
                 if response.status_code == 429:
                     try:
                         delay = float(response.headers.get("retry-after", "65"))
                     except ValueError:
                         delay = 65
-                    if delay > 120 or attempt == 2:
-                        raise RuntimeError("Groq quota exhausted; wait for reset or upgrade the organization plan. Key rotation does not add quota.")
-                    time.sleep(max(1, delay))
+                    retry_delay = max(retry_delay, min(120, max(1, delay)))
                     continue
                 if response.status_code >= 400:
-                    raise RuntimeError(f"Groq speech HTTP {response.status_code}: {response.text[:600]}")
+                    continue
                 with wave.open(io.BytesIO(response.content), "rb") as audio:
                     if audio.getnframes() == 0:
                         raise RuntimeError("Groq returned empty audio")
                 return response.content
-    raise RuntimeError("Groq rejected the configured speech credentials")
+            if attempt < 2:
+                time.sleep(retry_delay)
+    raise RuntimeError("All configured Groq speech accounts unavailable after 3 bounded sweeps")
 
 
 def synthesize(video_id, transcript, destination, language, tempo, force=False, model_override=None, cast=None):

@@ -108,7 +108,7 @@ DEFAULTS: dict[str, Any] = {
         "free_tts_first": True,
         "groq_voice": "troy",
         "groq_arabic_voice": "fahad",
-        "default_voice": "Charon",
+        "default_voice": "Puck",
         "speech_tempo": 1.0,
         "pace_note": "expressive, warm human storytelling; fluent complete thoughts, natural breaths and lively emphasis, never rushed",
         "style_extra": "",

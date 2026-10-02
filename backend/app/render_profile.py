@@ -57,7 +57,7 @@ def resources():
             quota, period = Path(path).read_text().split()
             if quota != 'max':
                 cpus = min(cpus, int(quota) / int(period))
-        except (OSError, ValueError):
+        except (OSError, ValueError, ZeroDivisionError):
             pass
     for path in cgroup_paths('cpu.cfs_quota_us','cpu'):
         quota = read_number(path)
@@ -84,7 +84,7 @@ def policy():
         raise ValueError('RENDER_PROFILE must be low_memory or auto')
     memory, cpus = resources()
     # At 2 GiB: 1.5 GiB shared Python/FFmpeg ceiling; never consume the OS reserve.
-    ceiling = int(min(memory * .75, memory - 384 * 1024**2))
+    ceiling = max(1, int(min(memory * .75, memory - 384 * 1024**2)))
     return Policy(name, memory, cpus, ceiling, max(1, min(4, math.floor(cpus))),
                   name == 'auto' and memory >= 1536 * 1024**2)
 
@@ -103,9 +103,12 @@ class MemoryPressure(RuntimeError):
 
 
 def memory_used():
+    readings = []
     for path in cgroup_paths('memory.current') + cgroup_paths('memory.usage_in_bytes','memory'):
         value = read_number(path)
-        if value is not None:
+        limit_name = 'memory.max' if Path(path).name == 'memory.current' else 'memory.limit_in_bytes'
+        limit = read_number(Path(path).with_name(limit_name).as_posix())
+        if value is not None and limit and 0 < limit <= psutil.virtual_memory().total:
             # Reclaimable file cache isn't a live frame buffer.
             stat = Path(path).with_name('memory.stat')
             try:
@@ -113,7 +116,12 @@ def memory_used():
                 value -= int(values.get('inactive_file', values.get('total_inactive_file', 0)))
             except (OSError, ValueError):
                 pass
-            return value
+            readings.append((limit, max(0,value)))
+    if readings:
+        # Account for siblings sharing the tightest ancestor limit, not an unrelated
+        # unlimited host cgroup or only a smaller child inside that constrained group.
+        tightest = min(limit for limit, _ in readings)
+        return max(value for limit, value in readings if limit == tightest)
     process = psutil.Process()
     total = process.memory_info().rss
     for child in process.children(recursive=True):

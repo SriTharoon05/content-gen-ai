@@ -17,6 +17,7 @@ import hashlib
 import json
 import shutil
 import subprocess
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -32,6 +33,7 @@ XFADE = {
 }
 ZERO_OVERLAP = {"hard_cut", "match_cut"}
 TRANSITION_KINDS = set(XFADE) | ZERO_OVERLAP
+_run_observer = ContextVar('media_run_observer', default=None)
 
 
 def binary(name: str) -> str:
@@ -45,6 +47,9 @@ def binary(name: str) -> str:
 
 
 def run(args: list[str], cwd: Path | None = None, timeout: int = 1800) -> str:
+    observer = _run_observer.get()
+    if observer is not None:
+        observer(args)
     # Bound decoder/filter/encoder threads for Render's small memory budget.
     from .render_profile import policy, guarded_run
     fast = policy().fast
@@ -186,8 +191,8 @@ def zoom_filter(frames: int, width: int, height: int, fps: int, zoom_out: bool =
 def clip_name(image: Path, frames: int, fps: int, width: int, height: int, zoom_out: bool = False) -> str:
     """Content address: same inputs, same file; different inputs, different file. Never stale."""
     try:
-        stat = image.stat()
-        signature = f"{image.name}:{stat.st_size}:{int(stat.st_mtime)}"
+        with image.open('rb') as source:
+            signature = hashlib.file_digest(source, 'sha256').hexdigest()
     except OSError:
         signature = image.name
     digest = hashlib.sha1(

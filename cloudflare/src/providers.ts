@@ -86,11 +86,17 @@ export function pcmWav(pcm:Uint8Array) {
   return Buffer.concat([header,pcm]);
 }
 export async function geminiSpeech(env:Env,c:any,plain:string,direction:string,conversation=false) {
-  const speechConfig=conversation?{multiSpeakerVoiceConfig:{speakerVoiceConfigs:[{speaker:'Alex',voiceConfig:{prebuiltVoiceConfig:{voiceName:'Puck'}}},{speaker:'Sam',voiceConfig:{prebuiltVoiceConfig:{voiceName:'Zephyr'}}}]}}:{voiceConfig:{prebuiltVoiceConfig:{voiceName:c.channel.strategy_json?.voice_name||c.settings.voice.default_voice||'Charon'}}};
+  const model=c.settings.models?.tts||'gemini-2.5-flash-preview-tts';
+  if(model.startsWith('canopylabs/'))return null;
+  const requested=generationProfile(c).options.voice||c.channel.strategy_json?.voice_name||c.settings.voice.default_voice||'Puck';
+  // Legacy history channels were cast as breathy/gravelly. The current production
+  // brief explicitly requires clear narration, while keeping other owner choices.
+  const voice=['Enceladus','Algenib'].includes(requested)?'Puck':requested;
+  const speechConfig=conversation?{multiSpeakerVoiceConfig:{speakerVoiceConfigs:[{speaker:'Alex',voiceConfig:{prebuiltVoiceConfig:{voiceName:'Puck'}}},{speaker:'Sam',voiceConfig:{prebuiltVoiceConfig:{voiceName:'Zephyr'}}}]}}:{voiceConfig:{prebuiltVoiceConfig:{voiceName:voice}}};
   for(const key of c.settings.keys?.gemini_free||[]) {
     try {
-      const r=await request('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent',key,
-        {contents:[{parts:[{text:`Read exactly the transcript in ${generationProfile(c).language}. Do not speak directions or speaker labels. Natural expressive human delivery, listen and react; no overlap of meaningful words.\nDirection: ${direction}\nTranscript:\n${plain}`}]}],generationConfig:{responseModalities:['AUDIO'],speechConfig}},true);
+      const r=await request(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,key,
+        {contents:[{parts:[{text:`Read exactly the transcript in ${generationProfile(c).language}. Do not speak directions or speaker labels. Clear full-voiced, warm, lively expressive human delivery; never husky, gravelly, breathy or whispered. Listen and react; no overlap of meaningful words. Keep continuous flowing sentences, not pauses at visual scene boundaries.\nDirection: ${direction}\nTranscript:\n${plain}`}]}],generationConfig:{responseModalities:['AUDIO'],speechConfig}},true);
       if(!r.ok){await r.body?.cancel();continue;}
       const b=await r.json() as any; const part=b.candidates?.[0]?.content?.parts?.find((p:any)=>p.inlineData?.data);
       if(!part)continue;
@@ -130,7 +136,7 @@ export async function transcribe(c:any,url:string) {
   const blob=await audio.blob();
   for(const key of c.settings.keys?.groq||[]) {
     try {
-    const form=new FormData();form.append('file',blob,'narration.wav');form.append('model','whisper-large-v3-turbo');
+    const form=new FormData();form.append('file',blob,'narration.wav');form.append('model',c.settings.align?.groq_model||'whisper-large-v3-turbo');
     form.append('response_format','verbose_json');form.append('timestamp_granularities[]','word');form.append('language',generationProfile(c).language);form.append('temperature','0');
     const r=await fetch('https://api.groq.com/openai/v1/audio/transcriptions',{method:'POST',headers:{Authorization:'Bearer '+key},body:form,signal:AbortSignal.timeout(180000)});
     if(!r.ok){await r.body?.cancel();continue;}

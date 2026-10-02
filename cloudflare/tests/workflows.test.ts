@@ -2,12 +2,12 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {build} from 'esbuild';
 
-const compiled=await build({stdin:{contents:"export {default as handler} from './src/index'; export {runStage} from './src/stages'; export {GenerationWorkflow,validateScript} from './src/generation';",resolveDir:process.cwd()},bundle:true,platform:'node',format:'esm',write:false,
+const compiled=await build({stdin:{contents:"export {default as handler} from './src/index'; export {runStage,stageEventTimeout,GenerationStageWorkflow} from './src/stages'; export {MediaWorkflow} from './src/workflow'; export {GenerationWorkflow,validateScript} from './src/generation';",resolveDir:process.cwd()},bundle:true,platform:'node',format:'esm',write:false,
   plugins:[{name:'workflow-test-runtime',setup(b){
     b.onResolve({filter:/^cloudflare:workers$/},()=>({path:'stub',namespace:'test'}));
     b.onLoad({filter:/.*/,namespace:'test'},()=>({contents:'export class WorkflowEntrypoint { constructor(ctx,env){this.env=env;this.ctx=ctx;} }',loader:'js'}));
   }}]});
-const {runStage,GenerationWorkflow,handler,validateScript}=await import('data:text/javascript;base64,'+Buffer.from(compiled.outputFiles[0].text).toString('base64'));
+const {runStage,stageEventTimeout,GenerationStageWorkflow,MediaWorkflow,GenerationWorkflow,handler,validateScript}=await import('data:text/javascript;base64,'+Buffer.from(compiled.outputFiles[0].text).toString('base64'));
 
 test('localized duo validation keeps strict scene IDs and two participants without English word quotas',()=>{
   const beats=Array.from({length:25},(_,i)=>({shot_id:'s'+String(i+1).padStart(3,'0'),speaker:i<12?'Alex':'Sam',narration:'இது மிகவும் சுவாரசியமான ஒரு கதை.',emphasis_words:[]}));
@@ -38,6 +38,58 @@ test('stage completion uses an event, not binding-status polling',async()=>{
   const env={GENERATION_STAGE:{create:async()=>{creates++;},get:async()=>{throw new Error('Unexpected polling');}}};
   const value=await runStage(env,step(),'fixture',{videoId:'a'.repeat(32),name:'image-s001',op:'image',data:{},retries:0,parentId:'parent'});
   assert.equal(creates,1);assert.equal(value.sha256,'a'.repeat(64));
+});
+
+test('parent stage deadline includes all child retry attempts',()=>{
+  assert.equal(stageEventTimeout(0),'16 minutes');
+  assert.equal(stageEventTimeout(2),'48 minutes');
+});
+test('lost stage callback recovers its committed checkpoint even when child notification errored',async()=>{
+  const original=globalThis.fetch;const value={url:'https://res.cloudinary.com/test/image/upload/a.png',sha256:'a'.repeat(64)};
+  globalThis.fetch=async()=>Response.json({steps:{'image-s001':value}});
+  const env={SUPABASE_URL:'https://database.test',SUPABASE_KEY:'fixture',GENERATION_STAGE:{create:async()=>{},get:async()=>{throw new Error('Checkpoint should recover without polling');}}};
+  const runner=step();runner.waitForEvent=async()=>{throw new Error('callback timed out');};
+  try{assert.deepEqual(await runStage(env,runner,'fixture',{videoId:'a'.repeat(32),name:'image-s001',op:'image',data:{},retries:2}),value);}
+  finally{globalThis.fetch=original;}
+});
+test('media trigger replay never starts another CircleCI pipeline after acceptance or claim',async()=>{
+  const original=globalThis.fetch;let circleCalls=0;let row:any={status:'queued',pipeline_id:'accepted'};
+  globalThis.fetch=async(url)=>{
+    if(String(url).includes('circleci.com')){circleCalls++;throw new Error('No duplicate pipeline');}
+    return Response.json(row);
+  };
+  const env={SUPABASE_URL:'https://database.test',SUPABASE_KEY:'fixture'};
+  const p={videoId:'a'.repeat(32),name:'trigger-0',op:'media-trigger',data:{},retries:2};
+  try{
+    assert.equal(await new GenerationStageWorkflow({},env).run({payload:p},step()),'accepted');
+    row={status:'running',pipeline_id:''};
+    assert.equal(await new GenerationStageWorkflow({},env).run({payload:p},step()),null);
+    assert.equal(circleCalls,0);
+  }finally{globalThis.fetch=original;}
+});
+test('media coordinator waits for an accepted queued pipeline and notifies both consumers on completion',async()=>{
+  const ops:string[]=[];const notified:string[]=[];let inspections=0;
+  const binding=(name:string)=>({get:async()=>({sendEvent:async()=>{notified.push(name);}})});
+  const env={GENERATION_STAGE:{create:async({params}:any)=>{ops.push(params.op);}},EDITING_WORKFLOW:binding('editing'),GENERATION_WORKFLOW:binding('generation')};
+  const runner:any=step();runner.waitForEvent=async(name:string)=>{
+    if(name.startsWith('done-'))return {payload:{ok:true,value:{status:inspections++===0?'queued':'succeeded',pipelineId:'accepted',result:{}}}};
+    return {payload:{}};
+  };
+  const result=await new MediaWorkflow({},env).run({instanceId:'media',payload:{taskId:'a'.repeat(32),notifyEditing:'edit',notifyGeneration:'generation'}},runner);
+  assert.equal(result.status,'succeeded');assert.deepEqual(ops,['media-inspect','media-inspect']);assert.deepEqual(notified,['editing','generation']);
+});
+test('cron failure isolation still reconciles publishing and admits news when video scheduling fails',async()=>{
+  const original=globalThis.fetch;const actions:string[]=[];let pending:Promise<any>|undefined;
+  globalThis.fetch=async(url,init)=>{
+    const data=JSON.parse(String(init?.body));actions.push(String(url).split('/').at(-1)!+':'+data.p_action);
+    if(String(url).endsWith('/cf_schedule'))throw new Error('scheduler unavailable');
+    return Response.json(String(url).endsWith('/cf_publish')?{videos:[]}:{due:false,remaining:0});
+  };
+  try{
+    await handler.scheduled({}, {SUPABASE_URL:'https://database.test',SUPABASE_KEY:'fixture'},{waitUntil:(p:Promise<any>)=>{pending=p;}});
+    await assert.rejects(pending!,AggregateError);
+    assert.deepEqual(actions,['cf_schedule:tick','cf_publish:pending_dispatch','cf_news:tick']);
+  }finally{globalThis.fetch=original;}
 });
 
 test('API rejects oversized JSON before touching database',async()=>{

@@ -1,0 +1,12 @@
+# Canonical media code imports models/settings, but does not run API servers,
+# AI SDKs or offline Vosk. Keep these constraints aligned with requirements.txt.
+pydantic>=2.12.5
+pydantic-settings>=2.7.0
+SQLAlchemy==2.0.36
+psycopg[binary]==3.2.3
+httpx==0.28.1
+numpy==2.2.1
+Pillow==11.1.0
+python-dotenv==1.0.1
+pgvector>=0.3.6
+psutil==7.0.0

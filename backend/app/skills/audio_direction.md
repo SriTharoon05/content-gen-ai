@@ -23,9 +23,11 @@ Inline square-bracket modifiers change delivery for the words around them: `[exc
 - Tags are spoken by nobody: they are direction, not content.
 
 ## Casting
-Pick the voice that already leans the way the story does — a breathy voice for something intimate, a
-gravelly one for something old and heavy, an upbeat one for something playful. Fighting the voice
-with the notes produces a worse read than choosing a voice that agrees with them.
+Use a clear, full-voiced, warm and lively narrator, including history and human stories. No husky,
+gravelly, whispered or deliberately breathy delivery. Mystery comes from the writing and emphasis,
+not an inaudible horror voice. Prefer a clear upbeat voice such as Puck for story narration.
+Perform one continuous explanation with natural breaths, contractions and meaningful emphasis.
+Do not reset the cadence at every image, rush the hook, shout, or turn ordinary words into drama.
 
 Use two speakers only when the piece genuinely reads as two people. A monologue with a second voice
 bolted on sounds like a mistake.

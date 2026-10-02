@@ -1,4 +1,5 @@
 import importlib.util
+import hashlib
 from pathlib import Path
 import tempfile
 import shutil
@@ -81,14 +82,73 @@ class MediaTests(unittest.TestCase):
                 pace.assert_called_once_with(root/'source.audio',output,.9,120,250)
 
     def test_unsafe_path_fails_before_network(self):
-        with tempfile.TemporaryDirectory() as folder, patch.object(worker.httpx,'stream') as network:
+        with tempfile.TemporaryDirectory() as folder, patch.object(worker.httpx,'Client') as network:
             with self.assertRaises(ValueError): worker.download_assets({'files':{'../escape':{}}},Path(folder))
             network.assert_not_called()
 
     def test_checksum_mismatch(self):
-        with tempfile.TemporaryDirectory() as folder, patch.object(worker.httpx,'stream') as stream:
-            stream.return_value.__enter__.return_value.iter_bytes.return_value=[b'invalid']
+        with tempfile.TemporaryDirectory() as folder, patch.object(worker.httpx,'Client') as client:
+            client.return_value.__enter__.return_value.stream.return_value.__enter__.return_value.iter_bytes.return_value=[b'invalid']
             with self.assertRaisesRegex(ValueError,'checksum'): worker.download_assets({'files':{'asset':{'url':'https://example.test/a','sha256':'a'*64}}},Path(folder))
+
+    def test_downloads_validate_all_paths_first_and_commit_verified_bytes(self):
+        payload=b'canonical asset'
+        asset={'url':'https://example.test/a','sha256':hashlib.sha256(payload).hexdigest()}
+        with tempfile.TemporaryDirectory() as folder,patch.object(worker.httpx,'Client') as network:
+            with self.assertRaises(ValueError):
+                worker.download_assets({'files':{'valid':asset,'../invalid':asset}},Path(folder))
+            network.assert_not_called()
+            stream=network.return_value.__enter__.return_value.stream.return_value.__enter__.return_value
+            stream.iter_bytes.return_value=[payload[:5],payload[5:]]
+            root=Path(folder)
+            worker.download_assets({'files':{'images/scene.png':asset,'narration.wav':asset}},root)
+            self.assertEqual((root/'images/scene.png').read_bytes(),payload)
+            self.assertEqual((root/'narration.wav').read_bytes(),payload)
+            self.assertFalse(list(root.rglob('*.download')))
+            self.assertEqual(network.call_args.kwargs['limits'].max_connections,4)
+
+    def test_single_named_audio_source_is_not_ignored(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);output=root/'prepared.wav';output.write_bytes(b'fixture')
+            with patch('app.audio.pace_and_trim',return_value=50),patch('app.audio.probe_duration',return_value=50):
+                from app.audio import pace_and_trim
+                worker.execute_media({'version':1,'operation':'prepare_audio','settings':{},'sources':['part.wav']},root,output)
+                self.assertEqual(pace_and_trim.call_args.args[0],root/'part.wav')
+
+    def test_upload_checks_target_size_and_dimensions_before_completion(self):
+        for mismatch in (None,'public_id','bytes','width','format'):
+            with self.subTest(mismatch=mismatch),tempfile.TemporaryDirectory() as folder:
+                output=Path(folder)/'final.mp4';output.write_bytes(b'canonical output')
+                capability={'url':'https://api.cloudinary.com/v1_1/test/video/upload','fields':{'public_id':'tasks/task/final'}}
+                response=MagicMock()
+                result={'public_id':capability['fields']['public_id'],'resource_type':'video','type':'upload',
+                    'format':'mp4','bytes':output.stat().st_size,'width':720,'height':1280}
+                if mismatch:result[mismatch]='invalid'
+                response.json.return_value=result
+                api=MagicMock(return_value=capability);metrics={'width':720,'height':1280}
+                with patch.object(worker.httpx,'post',return_value=response) as upload:
+                    if mismatch:
+                        with self.assertRaisesRegex(ValueError,'Cloudinary'):worker.upload_output(api,output,metrics)
+                        self.assertNotIn('upload_verified',metrics)
+                    else:
+                        worker.upload_output(api,output,metrics)
+                        self.assertTrue(metrics['upload_verified'])
+                    self.assertNotIn('headers',upload.call_args.kwargs)
+
+    def test_circleci_uses_cached_media_dependencies_and_api_only_trigger(self):
+        import yaml
+        root=Path(__file__).resolve().parents[2]
+        config=yaml.safe_load((root/'cloudflare/circleci/config.yml').read_text())
+        job=config['jobs']['media-pilot']
+        self.assertEqual(job['resource_class'],'medium')
+        self.assertEqual(config['workflows']['cloudflare-media-pilot']['when']['and'][0],{'equal':['api','<< pipeline.trigger.type >>']})
+        command=next(step['run']['command'] for step in job['steps'] if isinstance(step,dict) and step.get('run',{}).get('name')=='Install canonical media dependencies and fonts')
+        self.assertIn('requirements-media.txt',command)
+        self.assertNotIn('-r backend/requirements.txt',command)
+        canonical=set((root/'backend/requirements.txt').read_text().splitlines())
+        minimal=[line for line in (root/'backend/requirements-media.txt').read_text().splitlines() if line and not line.startswith('#')]
+        self.assertTrue(set(minimal)<=canonical)
+        self.assertFalse(any(line.startswith(('google-genai','vosk','fastapi','uvicorn')) for line in minimal))
 
     def test_speed_bounds(self):
         with self.assertRaises(ValueError): worker.execute_media({'version':1,'operation':'prepare_audio','playback_rate':5},Path('/in'),Path('/out'))
